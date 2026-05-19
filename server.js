@@ -2949,13 +2949,13 @@ async function start() {
     log("error", "unhandled_rejection", { error: error?.stack || String(error) });
   });
 
-  server.listen(PORT, "127.0.0.1", () => {
+  server.listen(PORT, "0.0.0.0", () => {
     log("info", "server_started", {
-      url: `http://127.0.0.1:${PORT}`,
+      url: `http://0.0.0.0:${PORT}`,
       database: DATABASE_URL.replace(/:[^:@/]+@/, ":***@")
     });
-    console.log(`Production ERP with PostgreSQL running on http://127.0.0.1:${PORT}`);
-    console.log(`Health check: http://127.0.0.1:${PORT}/api/health`);
+    console.log(`Production ERP with PostgreSQL running on http://0.0.0.0:${PORT}`);
+    console.log(`Health check: http://0.0.0.0:${PORT}/api/health`);
     console.log("Default login: admin / ChangeMe-12345");
   });
 }
