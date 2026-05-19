@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>نظام إدارة شركة المولدات</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="login" id="loginPanel">
+        <div>
+          <p class="eyebrow">نظام إنتاجي متصل بـ PostgreSQL</p>
+          <h1>إدارة الحسابات والمبيعات والمخزن من شاشة واحدة.</h1>
+          <p>بيانات العملاء والمخزون والقيود وسندات القبض تحفظ داخل قاعدة بيانات حقيقية، مع سجلات تدقيق ونسخ احتياطي.</p>
+        </div>
+        <form id="loginForm" class="card">
+          <h2>تسجيل الدخول</h2>
+          <label>اسم المستخدم<input name="username" required value="admin" /></label>
+          <label>كلمة المرور<input name="password" required type="password" value="ChangeMe-12345" /></label>
+          <button type="submit">دخول</button>
+          <small>غيّر كلمة المرور الافتراضية قبل الاعتماد النهائي.</small>
+        </form>
+      </section>
+
+      <section class="app hidden" id="appPanel">
+        <header>
+          <div>
+            <p class="eyebrow">Generator ERP</p>
+            <h1>لوحة الإدارة المحاسبية والمخزنية</h1>
+            <div class="status-strip" aria-label="حالة النظام">
+              <span>PostgreSQL</span>
+              <span>قيود متوازنة</span>
+              <span>نسخ احتياطي</span>
+            </div>
+          </div>
+          <button id="logoutBtn">خروج</button>
+        </header>
+
+        <nav class="module-nav" aria-label="تنقل الوحدات">
+          <button type="button" data-module-target="homePanel">الرئيسية</button>
+          <button type="button" data-module-target="dashboardCards">لوحة المؤشرات</button>
+          <button type="button" data-module-target="customerForm">العملاء</button>
+          <button type="button" data-module-target="salesWorkflowPanel">دورة المبيعات</button>
+          <button type="button" data-module-target="supplierForm">الموردون</button>
+          <button type="button" data-module-target="itemForm">المخزن</button>
+          <button type="button" data-module-target="receiptForm">سندات القبض</button>
+          <button type="button" data-module-target="openingJournalForm">القيود الافتتاحية</button>
+          <button type="button" data-module-target="openingInventoryForm">بضاعة أول مدة</button>
+          <button type="button" data-module-target="payrollForm">الرواتب</button>
+          <button type="button" data-module-target="maintenanceRevenueForm">إيرادات الصيانة</button>
+          <button type="button" data-module-target="fixedAssetForm">الموجودات الثابتة</button>
+          <button type="button" data-module-target="invoiceTemplateForm">قوالب الفواتير</button>
+          <button type="button" data-module-target="usersPermissionsPanel">المستخدمون والصلاحيات</button>
+          <button type="button" data-module-target="accountsPanel">هيكل الحسابات</button>
+          <button type="button" data-module-target="inventoryTracePanel">تتبع المخزون</button>
+          <button type="button" data-module-target="ledgerPanel">دفتر الأستاذ</button>
+          <button type="button" data-module-target="financialReportsPanel">ميزان المراجعة والقوائم المالية</button>
+          <button type="button" data-module-target="registeredData">التقارير</button>
+        </nav>
+
+        <section class="home-panel" id="homePanel">
+          <div class="home-executive">
+            <div class="home-title">
+              <div>
+                <p class="eyebrow">الرئيسية</p>
+                <h2>ملخص تنفيذي سريع</h2>
+              </div>
+              <button type="button" class="secondary" id="refreshHomeBtn">تحديث</button>
+            </div>
+            <div class="home-actions">
+              <button type="button" class="secondary" data-module-target="salesWorkflowPanel">فاتورة مبيعات جديدة</button>
+              <button type="button" class="secondary" data-module-target="receiptForm">سند قبض سريع</button>
+              <button type="button" class="secondary" data-module-target="ledgerPanel">كشف حساب</button>
+              <button type="button" class="secondary" data-module-target="inventoryTracePanel">تتبع مادة</button>
+            </div>
+
+            <div class="home-kpis">
+              <article><span>ربح الشهر</span><strong id="homeNetProfit">0</strong></article>
+              <article><span>التحصيل</span><strong id="homeCollectionRate">0%</strong></article>
+              <article><span>المخزون</span><strong id="homeInventoryValue">0</strong></article>
+              <article><span>الصيانة المفتوحة</span><strong id="homeOpenMaintenance">0</strong></article>
+            </div>
+
+            <div class="home-charts">
+              <section>
+                <h3>المبيعات الشهرية</h3>
+                <div id="homeSalesChart" class="line-chart"></div>
+              </section>
+              <section>
+                <h3>أعلى الزبائن</h3>
+                <div id="homeTopCustomers" class="bar-list"></div>
+              </section>
+              <section>
+                <h3>الربح والمصروفات</h3>
+                <div id="homeProfitChart" class="mini-chart"></div>
+              </section>
+              <section>
+                <h3>تنبيهات المخزون</h3>
+                <div id="homeLowStock" class="compact-list"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard module-panel" id="dashboardCards">
+          <div class="dashboard-head">
+            <div>
+              <p class="eyebrow">لوحة قرارات</p>
+              <h2>مؤشرات مالية وتشغيلية مختصرة</h2>
+            </div>
+            <button type="button" class="secondary" id="refreshDashboardBtn">تحديث المؤشرات</button>
+          </div>
+
+          <div class="kpi-grid">
+            <article><span>الربح الصافي الشهري</span><strong id="kpiNetProfit">0</strong></article>
+            <article><span>الذمم المدينة</span><strong id="kpiReceivables">0</strong></article>
+            <article><span>الصندوق والمصارف</span><strong id="kpiCashBanks">0</strong></article>
+            <article><span>قيمة المخزون</span><strong id="kpiInventoryValue">0</strong></article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="metric-panel">
+              <h3>القسم المالي</h3>
+              <div id="financialMetrics" class="metric-list"></div>
+              <div id="profitTrend" class="mini-chart"></div>
+            </section>
+
+            <section class="metric-panel">
+              <h3>المبيعات</h3>
+              <div id="salesMetrics" class="metric-list"></div>
+              <div id="topCustomersChart" class="bar-list"></div>
+              <div id="monthlySalesChart" class="line-chart"></div>
+            </section>
+
+            <section class="metric-panel">
+              <h3>الصيانة</h3>
+              <div id="maintenanceMetrics" class="metric-list"></div>
+              <div id="maintenanceWarnings" class="compact-list"></div>
+            </section>
+
+            <section class="metric-panel">
+              <h3>المخزون</h3>
+              <div id="inventoryMetrics" class="metric-list"></div>
+              <div id="lowStockList" class="compact-list"></div>
+              <div id="topMovingPartsChart" class="bar-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="grid">
+          <section class="card account-ledger-card" id="salesWorkflowPanel">
+            <h2>دورة المبيعات والتجهيز</h2>
+            <div class="workflow-steps">
+              <span>1. قطع فاتورة</span>
+              <span>2. قبض الحسابات</span>
+              <span>3. أمر تجهيز للمخزن</span>
+              <span>4. صرف أو طلب شراء</span>
+            </div>
+            <div class="workflow-grid">
+              <form id="salesInvoiceForm" class="mini-form">
+                <h3>فاتورة مبيعات</h3>
+                <label>الزبون<input name="customerName" required /></label>
+                <label>الهاتف<input name="customerPhone" /></label>
+                <label>رقم الفاتورة<input name="invoiceNo" placeholder="يولد تلقائيا إذا ترك فارغا" /></label>
+                <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+                <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+                <div class="journal-line">
+                  <label>رمز الصنف<input id="saleLineSku" /></label>
+                  <label>اسم الصنف<input id="saleLineName" /></label>
+                  <label>الكمية<input id="saleLineQty" type="number" min="0.01" step="0.01" /></label>
+                  <label>سعر الوحدة<input id="saleLinePrice" type="number" min="0" step="0.01" /></label>
+                  <button type="button" class="secondary" id="addSaleLineBtn">إضافة مادة</button>
+                </div>
+                <table><tbody id="saleLinesTable"></tbody></table>
+                <label>ملاحظات<input name="memo" /></label>
+                <button type="submit">حفظ الفاتورة</button>
+              </form>
+
+              <form id="invoicePaymentForm" class="mini-form">
+                <h3>قبض الحسابات</h3>
+                <label>الفاتورة<input name="invoiceId" id="invoicePaymentSelect" list="openInvoiceDatalist" placeholder="اكتب رقم الفاتورة أو اسم الزبون" autocomplete="off" /></label>
+                <label>نوع القبض<select name="receiptType"><option>عربون</option><option>تكملة حساب</option><option>تسديد حساب كامل</option></select></label>
+                <label>طريقة القبض<select name="paymentMethod" id="invoicePaymentMethod"><option>نقدا</option><option>دفع إلكتروني</option></select></label>
+                <label>حساب القبض<input name="cashAccountCode" id="invoiceCashAccount" list="accountDatalist" value="1611 - صندوق دينار" autocomplete="off" /></label>
+                <label>المبلغ<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+                <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+                <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+                <label>البيان<input name="memo" /></label>
+                <button type="submit">قبض وإنشاء أمر تجهيز</button>
+              </form>
+
+              <section class="mini-form">
+                <h3>أوامر التجهيز للمخزن</h3>
+                <div id="supplyOrdersList" class="workflow-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <form class="card" id="customerForm">
+            <h2>إضافة عميل</h2>
+            <label>الاسم<input name="name" required /></label>
+            <label>الهاتف<input name="phone" /></label>
+            <label>العنوان<input name="address" /></label>
+            <label>القطاع<select name="sector" id="customerSector"><option>قطاع خاص</option><option>قطاع عام</option></select></label>
+            <label id="customerKindLabel">نوع القطاع الخاص<select name="customerKind" id="customerKind"><option>فرد</option><option>شركة</option></select></label>
+            <button type="submit">حفظ العميل</button>
+          </form>
+
+          <form class="card" id="supplierForm">
+            <h2>إضافة مورد</h2>
+            <label>الاسم<input name="name" required /></label>
+            <label>الهاتف<input name="phone" /></label>
+            <label>العنوان<input name="address" /></label>
+            <label>النوع<select name="type"><option>مولدات</option><option>قطع غيار</option><option>زيوت</option><option>خدمات</option><option>عام</option></select></label>
+            <button type="submit">حفظ المورد</button>
+          </form>
+
+          <form class="card" id="itemForm">
+            <h2>إضافة صنف مخزن</h2>
+            <label>رمز الصنف<input name="sku" required /></label>
+            <label>اسم الصنف<input name="name" required /></label>
+            <label>التصنيف<select name="category"><option>مولد</option><option>قطع غيار</option><option>أدوات احتياطية</option><option>زيت</option><option>ماء</option></select></label>
+            <label>الماركة<select name="brand"><option>بيركنز</option><option>بادوين</option><option>ايسوزو صيني</option><option>عام</option></select></label>
+            <label>السعة/المواصفة<input name="spec" /></label>
+            <label>الكمية<input name="qty" type="number" min="0" value="0" /></label>
+            <label>الكلفة<input name="cost" type="number" min="0" value="0" /></label>
+            <label>سعر البيع<input name="salePrice" type="number" min="0" value="0" /></label>
+            <button type="submit">حفظ الصنف</button>
+          </form>
+
+          <form class="card" id="receiptForm">
+            <h2>سند قبض</h2>
+            <label>الزبون<input name="customerName" required /></label>
+            <label>نوع السند<select name="receiptType"><option>عربون</option><option>تكملة حساب</option><option>تسديد حساب قديم</option></select></label>
+            <label>طريقة القبض<select name="paymentMethod" id="receiptPaymentMethod"><option>نقدا</option><option>دفع إلكتروني</option></select></label>
+            <label>حساب القبض<input name="cashAccountCode" id="receiptCashAccount" list="accountDatalist" value="1611 - صندوق دينار" autocomplete="off" /></label>
+            <label>الحساب المقابل<input name="accountCode" list="accountDatalist" value="151 - العملاء" autocomplete="off" /></label>
+            <label>المبلغ<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <label>البيان<input name="memo" /></label>
+            <button type="submit">ترحيل سند القبض</button>
+          </form>
+
+          <form class="card" id="openingJournalForm">
+            <h2>قيد افتتاحي</h2>
+            <label>التاريخ<input name="date" type="date" /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <label>البيان<input name="memo" value="قيد افتتاحي" /></label>
+            <div class="journal-line">
+              <label>الحساب<input id="openingAccountSelect" list="accountDatalist" placeholder="اكتب رمز الحساب أو اسمه" autocomplete="off" /></label>
+              <label>الطرف<select id="openingSide"><option value="debit">مدين</option><option value="credit">دائن</option></select></label>
+              <label>المبلغ<input id="openingAmount" type="number" min="0.01" step="0.01" /></label>
+              <label>ملاحظة<input id="openingNote" /></label>
+              <button type="button" class="secondary" id="addOpeningLineBtn">إضافة سطر</button>
+            </div>
+            <div id="openingJournalSummary" class="summary">المدين: 0 | الدائن: 0 | الفرق: 0</div>
+            <table><tbody id="openingLinesTable"></tbody></table>
+            <button type="submit">حفظ القيد الافتتاحي</button>
+          </form>
+
+          <form class="card" id="openingInventoryForm">
+            <h2>قيد بضاعة أول مدة</h2>
+            <label>رمز الصنف<input name="sku" required /></label>
+            <label>اسم الصنف<input name="name" required /></label>
+            <label>التصنيف<select name="category"><option>مولد</option><option>قطع غيار</option><option>أدوات احتياطية</option><option>زيت</option><option>ماء</option></select></label>
+            <label>الماركة<select name="brand"><option>بيركنز</option><option>بادوين</option><option>ايسوزو صيني</option><option>عام</option></select></label>
+            <label>المواصفة<input name="spec" /></label>
+            <label>الكمية<input name="qty" type="number" min="0.01" step="0.01" required /></label>
+            <label>كلفة الوحدة<input name="cost" type="number" min="0.01" step="0.01" required /></label>
+            <label>سعر البيع<input name="salePrice" type="number" min="0" step="0.01" /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <button type="submit">ترحيل بضاعة أول مدة</button>
+          </form>
+
+          <form class="card" id="payrollForm">
+            <h2>رواتب وأجور العمال</h2>
+            <label>الاسم<input name="employeeName" required /></label>
+            <label>النوع<select name="kind"><option>راتب</option><option>أجور</option></select></label>
+            <label>المبلغ<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <label>حساب الدفع<input name="cashAccountCode" list="accountDatalist" value="1611 - صندوق دينار" autocomplete="off" /></label>
+            <label>البيان<input name="memo" /></label>
+            <button type="submit">ترحيل الراتب/الأجر</button>
+          </form>
+
+          <form class="card" id="maintenanceRevenueForm">
+            <h2>إيرادات الصيانة</h2>
+            <label>الزبون<input name="customerName" required /></label>
+            <label>المبلغ<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <label>الحالة<select name="paymentStatus"><option>نقدي</option><option>آجل</option></select></label>
+            <label>حساب القبض<input name="cashAccountCode" list="accountDatalist" value="1611 - صندوق دينار" autocomplete="off" /></label>
+            <label>البيان<input name="memo" placeholder="صيانة مولد / عقد سنوي" /></label>
+            <button type="submit">ترحيل إيراد الصيانة</button>
+          </form>
+
+          <form class="card" id="fixedAssetForm">
+            <h2>موجودات ثابتة</h2>
+            <label>نوع الموجود<select name="assetType"><option>سيارة</option><option>أثاث</option><option>آلة</option><option>معدات</option></select></label>
+            <label>اسم الموجود<input name="assetName" required /></label>
+            <label>المبلغ<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label>العملة<select name="currency" class="currency-select"><option>IQD</option><option>USD</option></select></label>
+            <label>سعر الصرف إلى العملة الأساسية<input name="exchangeRate" class="exchange-rate-input" type="number" min="0.000001" step="0.000001" value="1" required /></label>
+            <label>الدفع<select name="paymentStatus"><option>نقدي</option><option>آجل</option></select></label>
+            <label>حساب الدفع<input name="cashAccountCode" list="accountDatalist" value="1611 - صندوق دينار" autocomplete="off" /></label>
+            <button type="submit">ترحيل الموجود</button>
+          </form>
+
+          <section class="card" id="auditPanel">
+            <h2>سجل التدقيق</h2>
+            <div id="auditLog" class="audit"></div>
+          </section>
+
+          <form class="card" id="invoiceTemplateForm">
+            <h2>استيراد تصميم فاتورة Word</h2>
+            <label>اسم القالب<input name="name" required placeholder="فاتورة مبيعات رسمية" /></label>
+            <label>ملف Word DOCX<input name="templateFile" type="file" accept=".docx" required /></label>
+            <small>يمكن استخدام حقول متغيرة مثل: اسم الزبون، سعة المولد، سنوات الضمان، ساعات الضمان.</small>
+            <button type="submit">رفع القالب</button>
+          </form>
+
+          <section class="card account-ledger-card" id="usersPermissionsPanel">
+            <div class="report-head">
+              <div>
+                <p class="eyebrow">الإعدادات</p>
+                <h2>المستخدمون والصلاحيات</h2>
+              </div>
+              <button type="button" class="secondary" id="reloadUsersPermissionsBtn">تحديث</button>
+            </div>
+            <div class="settings-grid">
+              <form id="userForm" class="mini-form">
+                <h3>مستخدم جديد / تعديل</h3>
+                <input type="hidden" name="id" id="userId" />
+                <label>الاسم<input name="name" id="userName" required /></label>
+                <label>اسم الدخول<input name="username" id="userUsername" required /></label>
+                <label>الدور<select name="role" id="userRole"></select></label>
+                <label>كلمة المرور<input name="password" id="userPassword" type="password" placeholder="اتركها فارغة عند التعديل" /></label>
+                <label class="check-row"><input name="active" id="userActive" type="checkbox" checked /> مفعل</label>
+                <button type="submit">حفظ المستخدم</button>
+                <button type="button" class="secondary" id="clearUserFormBtn">تفريغ</button>
+              </form>
+
+              <section class="mini-form">
+                <h3>صلاحيات الدور</h3>
+                <label>الدور<select id="permissionRole"></select></label>
+                <div id="permissionList" class="permission-list"></div>
+                <button type="button" id="savePermissionsBtn">حفظ صلاحيات الدور</button>
+              </section>
+            </div>
+            <div class="settings-grid">
+              <form id="currencySettingsForm" class="mini-form">
+                <h3>العملة الأساسية والثانوية</h3>
+                <label>العملة الأساسية<select id="baseCurrency" name="baseCurrency"><option>IQD</option><option>USD</option></select></label>
+                <label>العملة الثانوية<select id="secondaryCurrency" name="secondaryCurrency"><option>USD</option><option>IQD</option></select></label>
+                <button type="submit">حفظ إعدادات العملة</button>
+              </form>
+              <form id="exchangeRateForm" class="mini-form">
+                <h3>إعدادات سعر الصرف</h3>
+                <label>التاريخ<input id="exchangeRateDate" name="rateDate" type="date" /></label>
+                <label>من عملة<select id="exchangeBaseCurrency" name="baseCurrency"><option>IQD</option><option>USD</option></select></label>
+                <label>إلى عملة<select id="exchangeQuoteCurrency" name="quoteCurrency"><option>USD</option><option>IQD</option></select></label>
+                <label>السعر<input id="exchangeRateValue" name="rate" type="number" min="0.000001" step="0.000001" required /></label>
+                <label>ملاحظة<input id="exchangeRateNote" name="note" /></label>
+                <button type="submit">حفظ سعر الصرف</button>
+              </form>
+            </div>
+            <div class="tables settings-table">
+              <div>
+                <h3>سجل أسعار الصرف</h3>
+                <table>
+                  <thead><tr><th>التاريخ</th><th>من</th><th>إلى</th><th>السعر</th><th>المصدر</th><th>الملاحظة</th></tr></thead>
+                  <tbody id="exchangeRatesTable"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="tables settings-table">
+              <div>
+                <h3>المستخدمون</h3>
+                <table>
+                  <thead><tr><th>المستخدم</th><th>الدور</th><th>الحالة</th><th></th></tr></thead>
+                  <tbody id="usersTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section class="card account-ledger-card" id="ledgerPanel">
+            <h2>دفتر الأستاذ - كشف حساب تفصيلي</h2>
+            <div class="ledger-filters">
+              <label class="account-search-label">الحساب
+                <input id="ledgerAccountSearch" placeholder="اكتب رمز الحساب أو اسمه..." autocomplete="off" />
+                <input id="ledgerAccountCode" type="hidden" />
+                <div id="ledgerAccountResults" class="account-search-results"></div>
+              </label>
+              <label>من تاريخ<input id="ledgerDateFrom" type="date" /></label>
+              <label>إلى تاريخ<input id="ledgerDateTo" type="date" /></label>
+              <label>المصدر<select id="ledgerSource"><option value="">الكل</option><option>سند قبض</option><option>قيد افتتاحي</option><option>بضاعة أول مدة</option><option>رواتب وأجور</option><option>إيرادات صيانة</option><option>موجودات ثابتة</option></select></label>
+              <label>الطرف<select id="ledgerSide"><option value="">الكل</option><option value="debit">مدين فقط</option><option value="credit">دائن فقط</option></select></label>
+              <label>بحث في البيان<input id="ledgerSearch" placeholder="اسم زبون، رقم سند، ملاحظة..." /></label>
+            </div>
+            <div class="export-actions">
+              <button type="button" id="loadLedgerBtn">عرض الكشف</button>
+              <button type="button" class="secondary" id="exportLedgerBtn">تصدير الكشف Excel</button>
+            </div>
+            <div id="ledgerSummary" class="summary">اختر الحساب ثم اضغط عرض الكشف</div>
+            <table>
+              <thead><tr><th>التاريخ</th><th>القيد</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead>
+              <tbody id="ledgerTable"></tbody>
+            </table>
+          </section>
+
+          <section class="card account-ledger-card" id="accountsPanel">
+            <h2>هيكل الحسابات</h2>
+            <p class="eyebrow">اضغط كلك يمين على أي حساب لإظهار أوامر الإدارة</p>
+            <label>بحث حساب<input id="accountsSearch" placeholder="رمز الحساب أو اسم الحساب" /></label>
+            <table>
+              <thead><tr><th>الرمز</th><th>الاسم</th><th>النوع</th><th>المستوى</th><th>الرصيد</th></tr></thead>
+              <tbody id="accountsTreeTable"></tbody>
+            </table>
+            <div id="accountContextMenu" class="context-menu hidden">
+              <button type="button" data-action="add">إضافة حساب</button>
+              <button type="button" data-action="delete">حذف حساب</button>
+              <button type="button" data-action="ledger">كشف حساب</button>
+            </div>
+          </section>
+
+          <section class="card account-ledger-card" id="inventoryTracePanel">
+            <h2>تتبع المخزون وكشف الرصيد</h2>
+            <div class="ledger-filters">
+              <label>بحث مادة<input id="inventoryTraceQuery" placeholder="SKU أو اسم المادة" /></label>
+              <label>من تاريخ<input id="inventoryTraceFrom" type="date" /></label>
+              <label>إلى تاريخ<input id="inventoryTraceTo" type="date" /></label>
+            </div>
+            <div class="export-actions">
+              <button type="button" id="loadInventoryTraceBtn">عرض الحركات</button>
+            </div>
+            <div id="inventoryTraceSummary" class="summary">اختر مادة واضغط عرض الحركات</div>
+            <table>
+              <thead><tr><th>المادة</th><th>التاريخ</th><th>الحركة</th><th>الكمية</th><th>رصيد جاري</th><th>المصدر</th></tr></thead>
+              <tbody id="inventoryTraceTable"></tbody>
+            </table>
+          </section>
+
+          <section class="card account-ledger-card" id="financialReportsPanel">
+            <h2>ميزان المراجعة والقوائم المالية</h2>
+            <div class="ledger-filters">
+              <label>من تاريخ<input id="financialDateFrom" type="date" /></label>
+              <label>إلى تاريخ<input id="financialDateTo" type="date" /></label>
+            </div>
+            <div class="export-actions">
+              <button type="button" id="loadFinancialReportsBtn">عرض التقارير</button>
+              <button type="button" class="secondary" id="exportTrialBalanceBtn">Excel ميزان المراجعة</button>
+              <button type="button" class="secondary" id="exportIncomeStatementBtn">Excel قائمة الدخل</button>
+              <button type="button" class="secondary" id="exportBalanceSheetBtn">Excel الميزانية العمومية</button>
+            </div>
+            <div id="trialBalanceSummary" class="summary">اختر الفترة ثم اضغط عرض التقارير</div>
+            <table>
+              <thead><tr><th>الرمز</th><th>الحساب</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead>
+              <tbody id="trialBalanceTable"></tbody>
+            </table>
+            <div id="incomeStatementSummary" class="summary"></div>
+            <div id="balanceSheetSummary" class="summary"></div>
+          </section>
+        </section>
+
+        <section class="card" id="registeredData">
+          <div class="report-head">
+            <div>
+              <p class="eyebrow">مركز التقارير</p>
+              <h2>البيانات المسجلة والتصدير</h2>
+            </div>
+            <span>Excel منظم حسب كل قسم</span>
+          </div>
+          <div class="export-actions">
+            <button class="secondary" data-export="all">تصدير كل التقارير Excel</button>
+            <button class="secondary" data-export="accounts">دليل الحسابات</button>
+            <button class="secondary" data-export="items">المخزون</button>
+            <button class="secondary" data-export="receipts">سندات القبض</button>
+            <button class="secondary" data-export="openingJournals">القيود الافتتاحية</button>
+            <button class="secondary" data-export="openingInventory">بضاعة أول مدة</button>
+            <button class="secondary" data-export="journals">القيود</button>
+          </div>
+          <div class="tables">
+            <div><h3>العملاء</h3><table><tbody id="customersTable"></tbody></table></div>
+            <div><h3>الموردون</h3><table><tbody id="suppliersTable"></tbody></table></div>
+            <div><h3>المخزون</h3><table><tbody id="itemsTable"></tbody></table></div>
+            <div><h3>فواتير المبيعات</h3><table><tbody id="salesTable"></tbody></table></div>
+            <div><h3>أوامر التجهيز</h3><table><tbody id="supplyOrdersTable"></tbody></table></div>
+            <div><h3>طلبات الشراء</h3><table><tbody id="purchaseRequestsTable"></tbody></table></div>
+            <div><h3>سندات القبض</h3><table><tbody id="receiptsTable"></tbody></table></div>
+            <div><h3>القيود الافتتاحية</h3><table><tbody id="openingJournalsTable"></tbody></table></div>
+            <div><h3>بضاعة أول مدة</h3><table><tbody id="openingInventoryTable"></tbody></table></div>
+            <div><h3>الرواتب والأجور</h3><table><tbody id="payrollsTable"></tbody></table></div>
+            <div><h3>إيرادات الصيانة</h3><table><tbody id="maintenanceRevenuesTable"></tbody></table></div>
+            <div><h3>الموجودات الثابتة</h3><table><tbody id="fixedAssetsTable"></tbody></table></div>
+            <div><h3>قوالب الفواتير</h3><table><tbody id="invoiceTemplatesTable"></tbody></table></div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <div id="toastContainer" class="toast-container"></div>
+    <dialog id="accountModal" class="app-modal">
+      <form method="dialog" id="accountModalForm" class="modal-body">
+        <h3 id="accountModalTitle">إدارة حساب</h3>
+        <input type="hidden" id="accountModalMode" />
+        <label>رمز الحساب<input id="accountModalCode" required /></label>
+        <small id="accountCodeValidation" class="field-hint"></small>
+        <div class="inline-actions">
+          <label class="inline-check"><input type="checkbox" id="accountAutoNumber" checked /> ترقيم تلقائي</label>
+          <button type="button" class="secondary tiny" id="suggestAccountCodeBtn">اقتراح رقم</button>
+        </div>
+        <label>اسم الحساب<input id="accountModalName" required /></label>
+        <label>نوع الحساب<input id="accountModalType" placeholder="موجودات / مطلوبات / إيرادات..." /></label>
+        <label>المستوى<input id="accountModalLevel" placeholder="رئيسي / فرعي / تحليلي" /></label>
+        <label>الحساب الأب<input id="accountModalParent" placeholder="مثال: 15" /></label>
+        <label>العملة<input id="accountModalCurrency" placeholder="IQD" /></label>
+        <label>طبيعة الحساب<input id="accountModalNature" placeholder="مدين / دائن" /></label>
+        <label>التصنيف<input id="accountModalClassification" placeholder="عميل / مورد / صندوق / مصرف / مصروف" /></label>
+        <div class="modal-actions">
+          <button type="button" class="secondary" id="accountModalCancel">إلغاء</button>
+          <button type="submit" id="accountModalSubmit">حفظ</button>
+        </div>
+      </form>
+    </dialog>
+    <datalist id="accountDatalist"></datalist>
+    <datalist id="openInvoiceDatalist"></datalist>
+    <script src="app.js"></script>
+  </body>
+</html>

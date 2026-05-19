@@ -1,0 +1,182 @@
+{
+  "meta": {
+    "name": "Generator ERP Production",
+    "createdAt": "2026-05-16T13:49:57.896Z",
+    "schemaVersion": 1
+  },
+  "accounts": [
+    {
+      "code": "1",
+      "name": "الموجودات",
+      "type": "موجودات",
+      "level": "إجمالي",
+      "balance": 0
+    },
+    {
+      "code": "13",
+      "name": "المخزون",
+      "type": "موجودات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "137",
+      "name": "مخزون البضائع بغرض البيع",
+      "type": "موجودات",
+      "level": "فرعي",
+      "balance": 0
+    },
+    {
+      "code": "16",
+      "name": "المدينون",
+      "type": "موجودات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "18",
+      "name": "النقد",
+      "type": "موجودات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "181",
+      "name": "الصندوق",
+      "type": "موجودات",
+      "level": "فرعي",
+      "balance": 0
+    },
+    {
+      "code": "182",
+      "name": "حسابات البنوك",
+      "type": "موجودات",
+      "level": "فرعي",
+      "balance": 0
+    },
+    {
+      "code": "183",
+      "name": "أجهزة الدفع POS",
+      "type": "موجودات",
+      "level": "فرعي",
+      "balance": 0
+    },
+    {
+      "code": "2",
+      "name": "المطلوبات",
+      "type": "مطلوبات",
+      "level": "إجمالي",
+      "balance": 0
+    },
+    {
+      "code": "21",
+      "name": "رأس المال",
+      "type": "مطلوبات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "26",
+      "name": "الدائنون",
+      "type": "مطلوبات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "3",
+      "name": "الاستخدامات",
+      "type": "استخدامات",
+      "level": "إجمالي",
+      "balance": 0
+    },
+    {
+      "code": "31",
+      "name": "رواتب وأجور",
+      "type": "استخدامات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "32",
+      "name": "المستلزمات السلعية",
+      "type": "استخدامات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "33",
+      "name": "المستلزمات الخدمية",
+      "type": "استخدامات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "35",
+      "name": "مشتريات البضائع بغرض البيع",
+      "type": "استخدامات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "39",
+      "name": "مصروفات أخرى",
+      "type": "استخدامات",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "4",
+      "name": "الموارد",
+      "type": "موارد",
+      "level": "إجمالي",
+      "balance": 0
+    },
+    {
+      "code": "42",
+      "name": "إيراد النشاط التجاري",
+      "type": "موارد",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "43",
+      "name": "إيراد النشاط الخدمي",
+      "type": "موارد",
+      "level": "رئيسي",
+      "balance": 0
+    },
+    {
+      "code": "94",
+      "name": "إيرادات أخرى",
+      "type": "موارد",
+      "level": "رئيسي",
+      "balance": 0
+    }
+  ],
+  "users": [
+    {
+      "id": 1,
+      "name": "مدير النظام",
+      "username": "admin",
+      "role": "مدير",
+      "active": true,
+      "passwordSalt": "db2cdefcdf40635b43b16d7a0f780038",
+      "passwordHash": "410ec80008e74d88ab1e884a5a7a90c690c25dad222debc30f3f2f45412ef070",
+      "failedAttempts": 0,
+      "createdAt": "2026-05-16T13:49:57.965Z"
+    }
+  ],
+  "customers": [],
+  "suppliers": [],
+  "items": [],
+  "sales": [],
+  "purchases": [],
+  "imports": [],
+  "vouchers": [],
+  "journals": [],
+  "generators": [],
+  "maintenance": [],
+  "reservations": [],
+  "saleOrders": [],
+  "purchaseRequests": []
+}

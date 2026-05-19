@@ -1,0 +1,16 @@
+{
+  "name": "generator-erp-production",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js",
+    "health": "node scripts/health-check.js",
+    "backup": "node scripts/backup-postgres.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pg": "^8.16.3"
+  }
+}
