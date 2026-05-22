@@ -10,6 +10,7 @@ let inventoryTraceReport = null;
 let accountTreeExpanded = new Set();
 let accountCodeValidationOk = true;
 let financialReports = null;
+let companyLogoData = null;
 
 const $ = (id) => document.getElementById(id);
 const money = (value) => new Intl.NumberFormat("ar-IQ", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -55,13 +56,24 @@ async function api(path, options = {}) {
     ...options
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || body.error || "فشل الطلب");
+  if (!response.ok) {
+    const errorMap = {
+      UNAUTHENTICATED: "انتهت جلستك. أعد تسجيل الدخول.",
+      FORBIDDEN: "ليس لديك صلاحية لهذا الإجراء.",
+      ACCOUNT_LOCKED: "تم قفل الحساب بعد محاولات دخول متعددة. تواصل مع الأدمن.",
+      INVALID_LOGIN: "اسم المستخدم أو كلمة المرور غير صحيحة.",
+      NOT_FOUND: "السجل المطلوب غير موجود.",
+    };
+    const message = errorMap[body.error] || body.detail || body.error || "حدث خطأ في الطلب";
+    throw new Error(message);
+  }
   return body;
 }
 
 async function loadState() {
   state = await api("/api/state");
   render();
+  loadCompanyLogo().catch(() => {});
 }
 
 async function loadAudit() {
@@ -80,6 +92,72 @@ async function loadDashboard() {
 async function loadUsersPermissions() {
   usersPermissions = await api("/api/users-permissions");
   renderUsersPermissions();
+}
+
+async function loadCompanyLogo() {
+  try {
+    const result = await api("/api/company-logo");
+    companyLogoData = result.data || null;
+  } catch {
+    companyLogoData = null;
+  }
+  renderCompanyLogoPreview();
+}
+
+function renderCompanyLogoPreview() {
+  const preview = $("companyLogoPreview");
+  if (!preview) return;
+  if (companyLogoData) {
+    preview.innerHTML = `<img src="${esc(companyLogoData)}" alt="شعار الشركة" style="max-height:80px;max-width:200px;" />`;
+  } else {
+    preview.innerHTML = "<span>لم يُرفع شعار بعد</span>";
+  }
+  const logo = $("journalPrintLogo");
+  if (logo) {
+    logo.src = companyLogoData || "";
+    logo.style.display = companyLogoData ? "block" : "none";
+  }
+}
+
+async function loadJournalPreview(journalId) {
+  if (!journalId) return;
+  const entry = await api(`/api/journal/${journalId}`);
+  const modal = $("journalPreviewModal");
+  const isBalanced = Math.abs(entry.totals.debit - entry.totals.credit) < 0.01;
+
+  $("journalPrintMeta").innerHTML = `
+    <div><strong>رقم القيد:</strong> ${esc(String(entry.id))}</div>
+    <div><strong>التاريخ:</strong> ${esc(entry.entryDate || "")}</div>
+    <div><strong>المصدر:</strong> ${esc(entry.source || "")}</div>
+    <div><strong>البيان:</strong> ${esc(entry.memo || "")}</div>
+    <div><strong>العملة:</strong> ${esc(entry.currency || "IQD")} - سعر الصرف: ${Number(entry.exchangeRate || 1).toFixed(4)}</div>
+    <div><strong>الحالة:</strong> ${esc(entry.status || "")}</div>
+  `;
+
+  $("journalPrintLines").innerHTML = (entry.lines || []).map((line) => `
+    <tr>
+      <td>${esc(line.accountCode)}</td>
+      <td>${esc(line.accountName || line.accountCode)}</td>
+      <td>${esc(line.note)}</td>
+      <td class="amount-cell">${line.debit > 0 ? money(line.debit) : ""}</td>
+      <td class="amount-cell">${line.credit > 0 ? money(line.credit) : ""}</td>
+    </tr>
+  `).join("") || "<tr><td colspan='5'>لا توجد سطور</td></tr>";
+
+  $("journalPrintDebit").textContent = money(entry.totals.debit);
+  $("journalPrintCredit").textContent = money(entry.totals.credit);
+
+  const balanceStatus = $("journalBalanceStatus");
+  if (isBalanced) {
+    balanceStatus.textContent = "✓ القيد متوازن";
+    balanceStatus.className = "journal-balance-status balanced";
+  } else {
+    balanceStatus.textContent = `⚠ القيد غير متوازن - الفرق: ${money(Math.abs(entry.totals.debit - entry.totals.credit))}`;
+    balanceStatus.className = "journal-balance-status unbalanced";
+  }
+
+  renderCompanyLogoPreview();
+  modal.showModal();
 }
 
 function showModule(targetId = "homePanel") {
@@ -154,7 +232,13 @@ function selectLedgerAccount(code, name) {
 function renderOpeningLines() {
   const debitTotal = openingLines.reduce((sum, line) => sum + Number(line.debit || 0), 0);
   const creditTotal = openingLines.reduce((sum, line) => sum + Number(line.credit || 0), 0);
-  $("openingJournalSummary").textContent = `المدين: ${money(debitTotal)} | الدائن: ${money(creditTotal)} | الفرق: ${money(debitTotal - creditTotal)}`;
+  const diff = debitTotal - creditTotal;
+  const isBalanced = openingLines.length > 0 && Math.abs(diff) < 0.001;
+  const summary = $("openingJournalSummary");
+  summary.textContent = `المدين: ${money(debitTotal)} | الدائن: ${money(creditTotal)} | الفرق: ${money(diff)}`;
+  summary.className = openingLines.length === 0 ? "" : isBalanced ? "balance-ok" : "balance-error";
+  const submitBtn = $("openingJournalForm")?.querySelector("button[type=submit]");
+  if (submitBtn) submitBtn.disabled = openingLines.length > 0 && !isBalanced;
   $("openingLinesTable").innerHTML = openingLines.map((line, index) => `
     <tr>
       <td><strong>${esc(line.accountCode)}</strong><br>مدين: ${money(line.debit)} | دائن: ${money(line.credit)}<br>${esc(line.note)}</td>
@@ -573,9 +657,38 @@ function render() {
     <tr><td><strong>${esc(row.assetType)} - ${esc(row.assetName || "-")}</strong><br>${money(row.amount)}<br>حساب ${esc(row.accountCode)}</td></tr>
   `).join("") || emptyRow;
 
-  $("invoiceTemplatesTable").innerHTML = (state.invoiceTemplates || []).map((row) => `
-    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.originalFilename)}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
-  `).join("") || "<tr><td>لا توجد قوالب</td></tr>";
+  const templates = state.invoiceTemplates || [];
+  const activeTemplate = templates.find((t) => t.active);
+  const badge = $("activeTemplateBadge");
+  if (badge) {
+    if (activeTemplate) {
+      badge.textContent = `القالب النشط: ${activeTemplate.name}`;
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+  const tbl2 = $("invoiceTemplatesTable2");
+  if (tbl2) {
+    tbl2.innerHTML = templates.map((row) => `
+      <tr>
+        <td><strong>${esc(row.name)}</strong></td>
+        <td>${esc(row.originalFilename)}</td>
+        <td>${new Date(row.createdAt).toLocaleString("ar-IQ")}</td>
+        <td>${row.active ? "<span class=\"badge-active\">نشط</span>" : ""}</td>
+        <td>
+          <button type="button" class="secondary tiny activate-template-btn" data-id="${row.id}">${row.active ? "نشط" : "تفعيل"}</button>
+          <a class="secondary tiny btn-link" href="/api/invoice-templates/${row.id}/download">تنزيل</a>
+        </td>
+      </tr>
+    `).join("") || "<tr><td colspan='5'>لا توجد قوالب</td></tr>";
+  }
+  const tbl1 = $("invoiceTemplatesTable");
+  if (tbl1) {
+    tbl1.innerHTML = templates.map((row) => `
+      <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.originalFilename)}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
+    `).join("") || "<tr><td>لا توجد قوالب</td></tr>";
+  }
 }
 
 function renderLedger(ledger) {
@@ -584,10 +697,10 @@ function renderLedger(ledger) {
   $("ledgerTable").innerHTML = (ledger.rows || []).map((row) => `
     <tr>
       <td>${esc(row.date)}</td>
-      <td>${esc(row.journalId)}<br>${esc(row.source)}</td>
+      <td>${row.journalId ? `<button type="button" class="link-btn view-journal-btn" data-id="${row.journalId}">${esc(String(row.journalId))}</button>` : ""}<br><small>${esc(row.source)}</small></td>
       <td>${esc(row.memo)}</td>
-      <td>${money(row.debit)}</td>
-      <td>${money(row.credit)}</td>
+      <td>${row.debit > 0 ? money(row.debit) : ""}</td>
+      <td>${row.credit > 0 ? money(row.credit) : ""}</td>
       <td><strong>${money(row.balance)}</strong></td>
     </tr>
   `).join("") || "<tr><td colspan=\"6\">لا توجد حركة على هذا الحساب</td></tr>";
@@ -841,7 +954,7 @@ $("fixedAssetForm").addEventListener("submit", async (event) => {
   event.currentTarget.reset();
 });
 
-$("invoiceTemplateForm").addEventListener("submit", async (event) => {
+$("invoiceTemplateUploadForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const data = formObject(form);
@@ -863,9 +976,57 @@ $("invoiceTemplateForm").addEventListener("submit", async (event) => {
       }
     })
   });
+  notify("تم رفع القالب بنجاح", "ok");
   form.reset();
   await loadState();
   await loadAudit();
+});
+
+document.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".activate-template-btn");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  await api(`/api/invoice-templates/${id}/activate`, { method: "POST", body: JSON.stringify({}) });
+  notify("تم تفعيل القالب", "ok");
+  await loadState();
+});
+
+$("saveCompanyLogoBtn")?.addEventListener("click", async () => {
+  const file = $("companyLogoInput")?.files[0];
+  if (!file) return alert("اختر صورة الشعار");
+  const logoBase64 = await fileToBase64(file);
+  await api("/api/company-logo", { method: "POST", body: JSON.stringify({ logoBase64 }) });
+  companyLogoData = logoBase64;
+  renderCompanyLogoPreview();
+  notify("تم حفظ شعار الشركة", "ok");
+});
+
+$("removeCompanyLogoBtn")?.addEventListener("click", async () => {
+  if (!confirm("هل تريد حذف شعار الشركة؟")) return;
+  await api("/api/company-logo", { method: "POST", body: JSON.stringify({ logoBase64: "" }) });
+  companyLogoData = null;
+  renderCompanyLogoPreview();
+  notify("تم حذف الشعار", "ok");
+});
+
+$("closeJournalPreviewBtn")?.addEventListener("click", () => {
+  $("journalPreviewModal")?.close();
+});
+
+$("printJournalBtn")?.addEventListener("click", () => {
+  window.print();
+});
+
+document.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".view-journal-btn");
+  if (!btn) return;
+  const journalId = Number(btn.dataset.id);
+  if (!journalId) return;
+  try {
+    await loadJournalPreview(journalId);
+  } catch (error) {
+    notify(error.message || "تعذر تحميل بيانات القيد", "error");
+  }
 });
 
 $("userForm").addEventListener("submit", async (event) => {

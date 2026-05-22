@@ -2913,6 +2913,58 @@ async function handleApi(req, res) {
       return sendJson(res, 200, { id });
     }
 
+    if (req.method === "GET" && /^\/api\/journal\/\d+$/.test(url.pathname)) {
+      if (!(await requirePermission(session, "accounting.view"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const journalId = Number(url.pathname.split("/").pop());
+      const entry = await pool.query(
+        `SELECT id, entry_date AS "entryDate", source, memo, currency, exchange_rate AS "exchangeRate", status, created_at AS "createdAt"
+         FROM journal_entries WHERE id=$1`,
+        [journalId]
+      );
+      if (!entry.rowCount) return sendJson(res, 404, { error: "Journal not found" });
+      const lines = await pool.query(
+        `SELECT jl.account_code AS "accountCode", a.name AS "accountName",
+                jl.debit::float8 AS debit, jl.credit::float8 AS credit,
+                jl.debit_base::float8 AS "debitBase", jl.credit_base::float8 AS "creditBase", jl.note
+         FROM journal_lines jl
+         LEFT JOIN accounts a ON a.code = jl.account_code
+         WHERE jl.journal_entry_id=$1 ORDER BY jl.id`,
+        [journalId]
+      );
+      const totalDebit = lines.rows.reduce((s, l) => s + num(l.debit), 0);
+      const totalCredit = lines.rows.reduce((s, l) => s + num(l.credit), 0);
+      return sendJson(res, 200, { ...entry.rows[0], lines: lines.rows, totals: { debit: totalDebit, credit: totalCredit } });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/company-logo") {
+      if (!(await requirePermission(session, "settings.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const body = await readBody(req);
+      const logoData = String(body.logoBase64 || "");
+      if (logoData && !logoData.startsWith("data:image/")) return sendJson(res, 400, { error: "Invalid image format" });
+      await pool.query(
+        "INSERT INTO meta (key, value) VALUES ('company_logo', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+        [JSON.stringify({ data: logoData || null, updatedAt: new Date().toISOString() })]
+      );
+      await audit(session.username, "SAVE_COMPANY_LOGO", "Company logo updated");
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/company-logo") {
+      const result = await pool.query("SELECT value FROM meta WHERE key='company_logo' LIMIT 1");
+      const data = result.rows[0]?.value?.data || null;
+      return sendJson(res, 200, { data });
+    }
+
+    if (req.method === "POST" && /^\/api\/invoice-templates\/\d+\/activate$/.test(url.pathname)) {
+      if (!(await requirePermission(session, "settings.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const templateId = Number(url.pathname.split("/")[3]);
+      await pool.query("UPDATE invoice_templates SET active=false");
+      const result = await pool.query("UPDATE invoice_templates SET active=true WHERE id=$1 RETURNING id", [templateId]);
+      if (!result.rowCount) return sendJson(res, 404, { error: "Template not found" });
+      await audit(session.username, "ACTIVATE_TEMPLATE", `templateId=${templateId}`);
+      return sendJson(res, 200, { ok: true });
+    }
+
     return sendJson(res, 404, { error: "NOT_FOUND" });
   } catch (error) {
     try {
