@@ -507,12 +507,31 @@ async function initDb() {
      ON CONFLICT (version) DO NOTHING`
   );
 
+  // migration 4: fix posting_mode for all system accounts based on level
+  await pool.query(
+    `INSERT INTO schema_migrations (version, name)
+     VALUES (4, 'fix_system_account_posting_mode')
+     ON CONFLICT (version) DO NOTHING`
+  );
+  await pool.query(`
+    UPDATE accounts
+    SET posting_mode = CASE level
+      WHEN 'إجمالي' THEN 'view'
+      WHEN 'رئيسي' THEN 'header'
+      ELSE 'transaction'
+    END
+    WHERE is_system = true
+      AND posting_mode IN ('header', 'view')
+      AND level IN ('فرعي', 'تحليلي')
+  `);
+
   for (const [code, name, type, level] of defaultAccounts) {
+    const postingMode = (level === "إجمالي") ? "view" : (level === "رئيسي") ? "header" : "transaction";
     await pool.query(
       `INSERT INTO accounts (code, name, type, level, is_system, posting_mode)
-       VALUES ($1, $2, $3, $4, true, 'header')
-       ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type, level=EXCLUDED.level, is_system=true`,
-      [code, name, type, level]
+       VALUES ($1, $2, $3, $4, true, $5)
+       ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type, level=EXCLUDED.level, is_system=true, posting_mode=EXCLUDED.posting_mode`,
+      [code, name, type, level, postingMode]
     );
   }
 
@@ -1109,14 +1128,16 @@ async function buildAccountLedger(accountCode, filters = {}) {
 
 async function buildTrialBalance(filters = {}) {
   const params = [];
-  let dateWhere = "1=1";
+  // status and date conditions belong in the JOIN predicate — putting them in WHERE
+  // turns the LEFT JOIN into an effective INNER JOIN and drops accounts with no movements
+  let joinConditions = "je.status = 'POSTED'";
   if (filters.dateFrom) {
     params.push(String(filters.dateFrom));
-    dateWhere += ` AND je.entry_date >= $${params.length}::date`;
+    joinConditions += ` AND je.entry_date >= $${params.length}::date`;
   }
   if (filters.dateTo) {
     params.push(String(filters.dateTo));
-    dateWhere += ` AND je.entry_date <= $${params.length}::date`;
+    joinConditions += ` AND je.entry_date <= $${params.length}::date`;
   }
   const rows = await pool.query(
     `SELECT a.code, a.name, a.type, a.level,
@@ -1124,8 +1145,7 @@ async function buildTrialBalance(filters = {}) {
             COALESCE(SUM(jl.credit),0)::float8 AS credit
      FROM accounts a
      LEFT JOIN journal_lines jl ON jl.account_code = a.code
-     LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
-     WHERE ${dateWhere}
+     LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND ${joinConditions}
      GROUP BY a.code, a.name, a.type, a.level
      ORDER BY length(a.code), a.code`,
     params
@@ -1307,13 +1327,18 @@ async function executePostingPipeline(
 async function insertStructuredJournal(client, appRecordId, journal) {
   const entryDate = journal.date || new Date().toISOString().slice(0, 10);
   await assertPeriodOpen(client, entryDate);
-  const lines = Array.isArray(journal.lines) ? journal.lines : [
+  const rawLines = Array.isArray(journal.lines) ? journal.lines : [
     { accountCode: journal.debitCode, debit: num(journal.amount), credit: 0, note: journal.memo || "" },
     { accountCode: journal.creditCode, debit: 0, credit: num(journal.amount), note: journal.memo || "" }
   ];
-  const debitTotal = lines.reduce((sum, line) => sum + num(line.debit), 0);
-  const creditTotal = lines.reduce((sum, line) => sum + num(line.credit), 0);
-  if (Math.abs(debitTotal - creditTotal) > 0.001) throw new Error("Structured journal is not balanced");
+  // filter BEFORE balance check — invalid lines must not count toward totals
+  const lines = rawLines
+    .map((l) => ({ accountCode: String(l.accountCode || "").trim(), debit: num(l.debit), credit: num(l.credit), note: String(l.note || "") }))
+    .filter((l) => l.accountCode && (l.debit > 0 || l.credit > 0));
+  if (lines.length < 2) throw new Error("القيد يحتاج سطرين صالحين على الأقل بحسابات ومبالغ صحيحة");
+  const debitTotal = lines.reduce((sum, line) => sum + line.debit, 0);
+  const creditTotal = lines.reduce((sum, line) => sum + line.credit, 0);
+  if (Math.abs(debitTotal - creditTotal) > 0.001) throw new Error(`القيد غير متوازن: مدين ${debitTotal.toFixed(3)} دائن ${creditTotal.toFixed(3)}`);
 
   const currency = String(journal.currency || "IQD").toUpperCase();
   const exchangeRate = num(journal.exchangeRate || 1) || 1;
@@ -1334,14 +1359,12 @@ async function insertStructuredJournal(client, appRecordId, journal) {
   const entryId = Number(entry.rows[0].id);
   await client.query("DELETE FROM journal_lines WHERE journal_entry_id=$1", [entryId]);
   for (const line of lines) {
-    const debit = num(line.debit);
-    const credit = num(line.credit);
-    if (!line.accountCode || (debit <= 0 && credit <= 0)) continue;
+    await assertTransactionAccount(client, line.accountCode);
     await client.query(
       `INSERT INTO journal_lines
         (journal_entry_id, account_code, debit, credit, debit_base, credit_base, note)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [entryId, String(line.accountCode), debit, credit, debit * exchangeRate, credit * exchangeRate, line.note || ""]
+      [entryId, line.accountCode, line.debit, line.credit, line.debit * exchangeRate, line.credit * exchangeRate, line.note]
     );
   }
   return entryId;
@@ -1425,6 +1448,8 @@ async function postJournal(client, { memo, debitCode, creditCode, amount, source
   await assertTransactionAccount(client, creditCode);
   const currencyInfo = await normalizeJournalCurrency(client, currency || payload?.currency, exchangeRate || payload?.exchangeRate);
   const journal = {
+    ...(payload || {}),
+    // core fields always override payload — never allow caller to swap accounts or amount
     memo,
     debitCode,
     creditCode,
@@ -1433,7 +1458,7 @@ async function postJournal(client, { memo, debitCode, creditCode, amount, source
     date: date || payload?.date || new Date().toISOString().slice(0, 10),
     currency: currencyInfo.currency,
     exchangeRate: currencyInfo.exchangeRate,
-    ...(payload || {})
+    lines: undefined   // prevent a stray lines array from payload turning a 2-line journal into something else
   };
   const result = await client.query(
     "INSERT INTO app_records (collection, payload) VALUES ('journals', $1) RETURNING id",

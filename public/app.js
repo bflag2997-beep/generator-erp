@@ -1301,7 +1301,12 @@ function renderFinancialReports() {
       <td>${money(row.balance)}</td>
     </tr>
   `).join("") || "<tr><td colspan=\"5\">لا توجد بيانات</td></tr>";
-  $("trialBalanceSummary").textContent = `مجموع المدين: ${money(trial.totals?.debit || 0)} | مجموع الدائن: ${money(trial.totals?.credit || 0)} | الفرق: ${money(trial.totals?.balance || 0)}`;
+  const tbDebit = trial.totals?.debit || 0;
+  const tbCredit = trial.totals?.credit || 0;
+  const tbDiff = Math.abs(tbDebit - tbCredit);
+  const tbSummary = $("trialBalanceSummary");
+  tbSummary.textContent = `مجموع المدين: ${money(tbDebit)} | مجموع الدائن: ${money(tbCredit)} | الفرق: ${money(tbDiff)}`;
+  tbSummary.className = tbDiff < 0.01 ? "balance-ok" : "balance-error";
 
   const income = financialReports.statements?.incomeStatement?.totals || {};
   $("incomeStatementSummary").textContent = `قائمة الدخل | الإيرادات: ${money(income.revenues || 0)} | المصروفات: ${money(income.expenses || 0)} | صافي الربح: ${money(income.netProfit || 0)}`;
