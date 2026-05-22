@@ -13,6 +13,7 @@ let financialReports = null;
 
 const $ = (id) => document.getElementById(id);
 const money = (value) => new Intl.NumberFormat("ar-IQ", { maximumFractionDigits: 0 }).format(Number(value || 0));
+const esc = (str) => String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const emptyRow = "<tr><td>لا توجد بيانات</td></tr>";
 function notify(message, type = "ok") {
   const container = $("toastContainer");
@@ -66,7 +67,7 @@ async function loadState() {
 async function loadAudit() {
   const rows = await api("/api/audit");
   $("auditLog").innerHTML = rows.slice(0, 50).map((row) => `
-    <div><strong>${row.action}</strong><br><span>${row.user} - ${new Date(row.at).toLocaleString("ar-IQ")}</span><br><small>${row.detail || ""}</small></div>
+    <div><strong>${esc(row.action)}</strong><br><span>${esc(row.user)} - ${new Date(row.at).toLocaleString("ar-IQ")}</span><br><small>${esc(row.detail)}</small></div>
   `).join("") || "<p>لا توجد حركة بعد</p>";
 }
 
@@ -156,7 +157,7 @@ function renderOpeningLines() {
   $("openingJournalSummary").textContent = `المدين: ${money(debitTotal)} | الدائن: ${money(creditTotal)} | الفرق: ${money(debitTotal - creditTotal)}`;
   $("openingLinesTable").innerHTML = openingLines.map((line, index) => `
     <tr>
-      <td><strong>${line.accountCode}</strong><br>مدين: ${money(line.debit)} | دائن: ${money(line.credit)}<br>${line.note || ""}</td>
+      <td><strong>${esc(line.accountCode)}</strong><br>مدين: ${money(line.debit)} | دائن: ${money(line.credit)}<br>${esc(line.note)}</td>
       <td><button type="button" class="secondary remove-opening-line" data-index="${index}">حذف</button></td>
     </tr>
   `).join("") || emptyRow;
@@ -166,7 +167,7 @@ function renderSaleLines() {
   const total = saleLines.reduce((sum, line) => sum + Number(line.total || 0), 0);
   $("saleLinesTable").innerHTML = saleLines.map((line, index) => `
     <tr>
-      <td><strong>${line.sku} - ${line.name || ""}</strong><br>${money(line.qty)} × ${money(line.unitPrice)} = ${money(line.total)}</td>
+      <td><strong>${esc(line.sku)} - ${esc(line.name)}</strong><br>${money(line.qty)} × ${money(line.unitPrice)} = ${money(line.total)}</td>
       <td><button type="button" class="secondary remove-sale-line" data-index="${index}">حذف</button></td>
     </tr>
   `).join("") || `<tr><td>لا توجد مواد في الفاتورة</td></tr>`;
@@ -180,15 +181,15 @@ function renderSalesWorkflow() {
   });
   if ($("openInvoiceDatalist")) {
     $("openInvoiceDatalist").innerHTML = openInvoices.map((row) => `
-      <option value="${row.id} - ${row.invoiceNo || row.id} - ${row.customerName || ""} - المتبقي ${money(row.balance)}"></option>
+      <option value="${esc(row.id)} - ${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)} - المتبقي ${money(row.balance)}"></option>
     `).join("");
   }
 
   $("supplyOrdersList").innerHTML = (state.supplyOrders || []).map((row) => `
     <div class="workflow-item">
-      <strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong>
-      <span>${row.workflowStage || row.status || ""}</span>
-      <small>${(row.lines || []).map((line) => `${line.sku}: ${money(line.qty)}`).join(" | ")}</small>
+      <strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong>
+      <span>${esc(row.workflowStage || row.status)}</span>
+      <small>${(row.lines || []).map((line) => `${esc(line.sku)}: ${money(line.qty)}`).join(" | ")}</small>
       <button type="button" class="secondary process-supply-order" data-id="${row.id}">تنفيذ أمر التجهيز</button>
     </div>
   `).join("") || "<p>لا توجد أوامر تجهيز حاليا</p>";
@@ -300,7 +301,7 @@ function renderBars(rows, targetId) {
     const value = Number(row.value || row.qty || 0);
     return `
       <div class="bar-row">
-        <span>${row.label || row.name || row.sku || "غير محدد"}</span>
+        <span>${esc(row.label || row.name || row.sku || "غير محدد")}</span>
         <div><i style="width:${Math.max(4, (value / max) * 100)}%"></i></div>
         <b>${money(value)}</b>
       </div>
@@ -370,10 +371,10 @@ function renderDashboard() {
   renderBars((sales.topCustomers || []).slice(0, 5), "topCustomersChart");
   renderLineChart((sales.salesByMonth || []).slice(-6), "monthlySalesChart");
   $("maintenanceWarnings").innerHTML = (maintenance.overdueContracts || []).slice(0, 5).map((row) => `
-    <div><strong>${row.invoiceNo || row.id || "طلب"}</strong><span>${row.status || ""}</span></div>
+    <div><strong>${esc(row.invoiceNo || row.id || "طلب")}</strong><span>${esc(row.status)}</span></div>
   `).join("") || "<p>لا توجد تنبيهات صيانة حالياً</p>";
   $("lowStockList").innerHTML = (inventory.lowStock || []).slice(0, 6).map((item) => `
-    <div><strong>${item.sku} - ${item.name}</strong><span>المتوفر: ${money(item.qty)}</span></div>
+    <div><strong>${esc(item.sku)} - ${esc(item.name)}</strong><span>المتوفر: ${money(item.qty)}</span></div>
   `).join("") || "<p>لا توجد أصناف منخفضة حالياً</p>";
   renderBars((inventory.topMovingParts || []).map((row) => ({
     label: `${row.sku || ""} ${row.name || ""}`.trim(),
@@ -404,7 +405,7 @@ function renderHomeDashboard() {
   `).join("") || "<p>لا توجد حركة شهرية بعد</p>";
 
   $("homeLowStock").innerHTML = (inventory.lowStock || []).slice(0, 5).map((item) => `
-    <div><strong>${item.sku} - ${item.name}</strong><span>المتوفر: ${money(item.qty)}</span></div>
+    <div><strong>${esc(item.sku)} - ${esc(item.name)}</strong><span>المتوفر: ${money(item.qty)}</span></div>
   `).join("") || "<p>لا توجد تنبيهات مخزون حالياً</p>";
 }
 
@@ -433,8 +434,8 @@ function renderUsersPermissions() {
   `).join("") || "<p>لا توجد صلاحيات معرفة</p>";
   $("usersTable").innerHTML = (usersPermissions.users || []).map((user) => `
     <tr>
-      <td><strong>${user.name}</strong><br>${user.username}</td>
-      <td>${user.role}</td>
+      <td><strong>${esc(user.name)}</strong><br>${esc(user.username)}</td>
+      <td>${esc(user.role)}</td>
       <td>${user.active ? "مفعل" : "موقوف"}</td>
       <td><button type="button" class="secondary edit-user" data-id="${user.id}">تعديل</button></td>
     </tr>
@@ -525,55 +526,55 @@ function render() {
   syncCurrencyFields(document);
 
   $("customersTable").innerHTML = state.customers.map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.phone || ""}<br>${row.address || ""}<br>${row.sector || "غير مصنف"}${row.customerKind ? " / " + row.customerKind : ""}</td></tr>
+    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.phone)}<br>${esc(row.address)}<br>${esc(row.sector || "غير مصنف")}${row.customerKind ? " / " + esc(row.customerKind) : ""}</td></tr>
   `).join("") || emptyRow;
 
   $("suppliersTable").innerHTML = state.suppliers.map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.phone || ""}<br>${row.type || ""}</td></tr>
+    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.phone)}<br>${esc(row.type)}</td></tr>
   `).join("") || emptyRow;
 
   $("itemsTable").innerHTML = state.items.map((row) => `
-    <tr><td><strong>${row.sku} - ${row.name}</strong><br>${row.category || ""} / ${row.brand || ""}<br>كمية: ${money(row.qty)} - كلفة: ${money(row.cost)}</td></tr>
+    <tr><td><strong>${esc(row.sku)} - ${esc(row.name)}</strong><br>${esc(row.category)} / ${esc(row.brand)}<br>كمية: ${money(row.qty)} - كلفة: ${money(row.cost)}</td></tr>
   `).join("") || emptyRow;
 
   $("salesTable").innerHTML = (state.sales || []).map((row) => `
-    <tr><td><strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong><br>${row.status || ""}<br>الإجمالي: ${money(row.total)} | المقبوض: ${money(row.paidAmount)} | المتبقي: ${money(row.balance)}</td></tr>
+    <tr><td><strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong><br>${esc(row.status)}<br>الإجمالي: ${money(row.total)} | المقبوض: ${money(row.paidAmount)} | المتبقي: ${money(row.balance)}</td></tr>
   `).join("") || emptyRow;
 
   $("supplyOrdersTable").innerHTML = (state.supplyOrders || []).map((row) => `
-    <tr><td><strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong><br>${row.status || ""}<br>${(row.lines || []).map((line) => `${line.sku}: ${money(line.qty)}`).join(" | ")}</td></tr>
+    <tr><td><strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong><br>${esc(row.status)}<br>${(row.lines || []).map((line) => `${esc(line.sku)}: ${money(line.qty)}`).join(" | ")}</td></tr>
   `).join("") || emptyRow;
 
   $("purchaseRequestsTable").innerHTML = (state.purchaseRequests || []).map((row) => `
-    <tr><td><strong>طلب شراء للفاتورة ${row.invoiceNo || ""}</strong><br>${row.status || ""}<br>${(row.lines || []).map((line) => `${line.sku}: ناقص ${money(line.missingQty)}`).join(" | ")}</td></tr>
+    <tr><td><strong>طلب شراء للفاتورة ${esc(row.invoiceNo)}</strong><br>${esc(row.status)}<br>${(row.lines || []).map((line) => `${esc(line.sku)}: ناقص ${money(line.missingQty)}`).join(" | ")}</td></tr>
   `).join("") || emptyRow;
 
   $("receiptsTable").innerHTML = (state.receipts || []).map((row) => `
-    <tr><td><strong>${row.customerName || "-"}</strong><br>${row.receiptType || ""} - ${row.paymentMethod || ""}<br>${money(row.amount)} | قيد ${row.journalId || ""}</td></tr>
+    <tr><td><strong>${esc(row.customerName || "-")}</strong><br>${esc(row.receiptType)} - ${esc(row.paymentMethod)}<br>${money(row.amount)} | قيد ${esc(row.journalId)}</td></tr>
   `).join("") || emptyRow;
 
   $("openingJournalsTable").innerHTML = (state.openingJournals || []).map((row) => `
-    <tr><td><strong>${row.memo || "قيد افتتاحي"}</strong><br>${row.date || ""}<br>قيد ${row.journalId || ""}</td></tr>
+    <tr><td><strong>${esc(row.memo || "قيد افتتاحي")}</strong><br>${esc(row.date)}<br>قيد ${esc(row.journalId)}</td></tr>
   `).join("") || emptyRow;
 
   $("openingInventoryTable").innerHTML = (state.openingInventory || []).map((row) => `
-    <tr><td><strong>${row.sku} - ${row.name}</strong><br>${row.brand || ""} / ${row.category || ""}<br>${money(row.qty)} × ${money(row.cost)} = ${money(row.amount)}</td></tr>
+    <tr><td><strong>${esc(row.sku)} - ${esc(row.name)}</strong><br>${esc(row.brand)} / ${esc(row.category)}<br>${money(row.qty)} × ${money(row.cost)} = ${money(row.amount)}</td></tr>
   `).join("") || emptyRow;
 
   $("payrollsTable").innerHTML = (state.payrolls || []).map((row) => `
-    <tr><td><strong>${row.employeeName || "-"}</strong><br>${row.kind || ""} - ${money(row.amount)}<br>${row.memo || ""}</td></tr>
+    <tr><td><strong>${esc(row.employeeName || "-")}</strong><br>${esc(row.kind)} - ${money(row.amount)}<br>${esc(row.memo)}</td></tr>
   `).join("") || emptyRow;
 
   $("maintenanceRevenuesTable").innerHTML = (state.maintenanceRevenues || []).map((row) => `
-    <tr><td><strong>${row.customerName || "-"}</strong><br>${row.paymentStatus || ""} - ${money(row.amount)}<br>${row.memo || ""}</td></tr>
+    <tr><td><strong>${esc(row.customerName || "-")}</strong><br>${esc(row.paymentStatus)} - ${money(row.amount)}<br>${esc(row.memo)}</td></tr>
   `).join("") || emptyRow;
 
   $("fixedAssetsTable").innerHTML = (state.fixedAssets || []).map((row) => `
-    <tr><td><strong>${row.assetType || ""} - ${row.assetName || "-"}</strong><br>${money(row.amount)}<br>حساب ${row.accountCode || ""}</td></tr>
+    <tr><td><strong>${esc(row.assetType)} - ${esc(row.assetName || "-")}</strong><br>${money(row.amount)}<br>حساب ${esc(row.accountCode)}</td></tr>
   `).join("") || emptyRow;
 
   $("invoiceTemplatesTable").innerHTML = (state.invoiceTemplates || []).map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.originalFilename}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
+    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.originalFilename)}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
   `).join("") || "<tr><td>لا توجد قوالب</td></tr>";
 }
 
@@ -582,9 +583,9 @@ function renderLedger(ledger) {
   $("ledgerSummary").textContent = `${ledger.account.code} - ${ledger.account.name} | مجموع المدين: ${money(ledger.totals.debit)} | مجموع الدائن: ${money(ledger.totals.credit)} | الرصيد: ${money(ledger.totals.balance)}`;
   $("ledgerTable").innerHTML = (ledger.rows || []).map((row) => `
     <tr>
-      <td>${row.date || ""}</td>
-      <td>${row.journalId || ""}<br>${row.source || ""}</td>
-      <td>${row.memo || ""}</td>
+      <td>${esc(row.date)}</td>
+      <td>${esc(row.journalId)}<br>${esc(row.source)}</td>
+      <td>${esc(row.memo)}</td>
       <td>${money(row.debit)}</td>
       <td>${money(row.credit)}</td>
       <td><strong>${money(row.balance)}</strong></td>

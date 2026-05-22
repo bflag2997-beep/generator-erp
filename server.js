@@ -705,13 +705,11 @@ async function normalizeJournalCurrency(client, currencyInput, exchangeRateInput
 }
 
 async function stateFromDb() {
-  const [accounts, users, customers, suppliers, items, auditRows, records, templates, settings, exchangeRates] = await Promise.all([
+  const [accounts, customers, suppliers, items, records, templates, settings, exchangeRates] = await Promise.all([
     pool.query("SELECT account_id AS id, code, name, type, level, parent_code AS \"parentCode\", parent_id AS \"parentId\", currency, nature, classification, level_no AS \"levelNo\", posting_mode AS \"postingMode\", active, is_system AS \"isSystem\" FROM accounts WHERE active=true ORDER BY length(code), code"),
-    pool.query("SELECT id, name, username, role, active, failed_attempts AS \"failedAttempts\", created_at AS \"createdAt\" FROM users ORDER BY id"),
     pool.query("SELECT id, name, phone, address, type, data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM customers ORDER BY id"),
     pool.query("SELECT id, name, phone, address, type, data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM suppliers ORDER BY id"),
     pool.query("SELECT id, sku, name, category, brand, spec, qty::float8 AS qty, cost::float8 AS cost, sale_price::float8 AS \"salePrice\", data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM items ORDER BY id"),
-    pool.query("SELECT at, username AS user, action, detail FROM audit_log ORDER BY id DESC LIMIT 200"),
     pool.query("SELECT id, collection, payload, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM app_records ORDER BY id"),
     pool.query("SELECT id, name, original_filename AS \"originalFilename\", active, created_by AS \"createdBy\", created_at AS \"createdAt\" FROM invoice_templates ORDER BY id DESC"),
     loadSystemSettings(),
@@ -728,10 +726,8 @@ async function stateFromDb() {
   return {
     meta: { name: "Generator ERP PostgreSQL", storage: "PostgreSQL" },
     accounts: accounts.rows.map((row) => ({ ...row, balance: balances[row.code] || 0 })),
-    users: users.rows,
     settings,
     exchangeRates: exchangeRates.rows,
-    audit: auditRows.rows,
     invoiceTemplates: templates.rows,
     customers: customers.rows.map((row) => ({ ...row, ...(row.data || {}) })),
     suppliers: suppliers.rows.map((row) => ({ ...row, ...(row.data || {}) })),
@@ -955,7 +951,7 @@ async function saveUser(body) {
       const password = createPassword(String(body.password));
       const result = await pool.query(
         `UPDATE users
-         SET name=$1, username=$2, role=$3, active=$4, password_salt=$5, password_hash=$6, updated_at=now()
+         SET name=$1, username=$2, role=$3, active=$4, password_salt=$5, password_hash=$6, failed_attempts=0, updated_at=now()
          WHERE id=$7 RETURNING id`,
         [name, username, role, active, password.salt, password.hash, Number(body.id)]
       );
@@ -964,7 +960,7 @@ async function saveUser(body) {
     }
     const result = await pool.query(
       `UPDATE users
-       SET name=$1, username=$2, role=$3, active=$4, updated_at=now()
+       SET name=$1, username=$2, role=$3, active=$4, failed_attempts=0, updated_at=now()
        WHERE id=$5 RETURNING id`,
       [name, username, role, active, Number(body.id)]
     );
@@ -1807,6 +1803,7 @@ async function postInvoicePayment(client, body) {
 
 async function processSupplyOrder(client, body) {
   const order = await loadRecord(client, "supplyOrders", Number(body.orderId));
+  if (order.payload.processedAt) throw new Error("أمر التجهيز نُفِّذ مسبقاً ولا يمكن تنفيذه مرة أخرى");
   const lines = order.payload.lines || [];
   if (!lines.length) throw new Error("Supply order has no lines");
   const issued = [];
@@ -2547,10 +2544,20 @@ async function handleApi(req, res) {
       const body = await readBody(req);
       const result = await pool.query("SELECT * FROM users WHERE username=$1 AND active=true", [body.username]);
       const user = result.rows[0];
-      if (!user || !verifyPassword(user, body.password)) {
-        await audit(body.username || "unknown", "LOGIN_FAILED", "Invalid login");
+      if (!user) {
+        await audit(body.username || "unknown", "LOGIN_FAILED", "User not found");
         return sendJson(res, 403, { error: "INVALID_LOGIN" });
       }
+      if (user.failed_attempts >= 5) {
+        await audit(user.username, "LOGIN_BLOCKED", "Account locked after too many failed attempts");
+        return sendJson(res, 403, { error: "ACCOUNT_LOCKED" });
+      }
+      if (!verifyPassword(user, body.password)) {
+        await pool.query("UPDATE users SET failed_attempts=failed_attempts+1, updated_at=now() WHERE id=$1", [user.id]);
+        await audit(user.username, "LOGIN_FAILED", `Invalid password attempt ${user.failed_attempts + 1}`);
+        return sendJson(res, 403, { error: "INVALID_LOGIN" });
+      }
+      await pool.query("UPDATE users SET failed_attempts=0, updated_at=now() WHERE id=$1", [user.id]);
       const token = crypto.randomBytes(32).toString("hex");
       sessions.set(token, { username: user.username, role: user.role, expiresAt: Date.now() + SESSION_TTL_MS });
       await audit(user.username, "LOGIN", "Successful login");
@@ -2569,10 +2576,13 @@ async function handleApi(req, res) {
     if (!session) return;
 
     if (req.method === "GET" && url.pathname === "/api/state") {
-      return sendJson(res, 200, await stateFromDb());
+      const data = await stateFromDb();
+      if (!(await requirePermission(session, "hr.manage"))) data.payrolls = [];
+      return sendJson(res, 200, data);
     }
 
     if (req.method === "GET" && url.pathname === "/api/audit") {
+      if (!(await requirePermission(session, "users.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const result = await pool.query("SELECT at, username AS user, action, detail FROM audit_log ORDER BY id DESC LIMIT 500");
       return sendJson(res, 200, result.rows);
     }
@@ -2646,6 +2656,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/account-ledger") {
+      if (!(await requirePermission(session, "accounting.view"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const ledger = await buildAccountLedger(url.searchParams.get("accountCode"), {
         dateFrom: url.searchParams.get("dateFrom"),
         dateTo: url.searchParams.get("dateTo"),
