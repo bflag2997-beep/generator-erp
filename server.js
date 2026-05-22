@@ -698,7 +698,8 @@ function serveStatic(req, res) {
 }
 
 function num(value) {
-  return Number(value || 0);
+  const n = parseFloat(value);
+  return isNaN(n) ? 0 : n;
 }
 
 function normalizeText(value) {
@@ -1524,6 +1525,7 @@ async function postBalancedJournal(client, { memo, source, date, lines, payload,
 
   const currencyInfo = await normalizeJournalCurrency(client, currency || payload?.currency, exchangeRate || payload?.exchangeRate);
   const journal = {
+    ...(payload || {}),
     memo: memo || source || "قيد محاسبي",
     source: source || "قيد محاسبي",
     date: date || new Date().toISOString().slice(0, 10),
@@ -1532,8 +1534,7 @@ async function postBalancedJournal(client, { memo, source, date, lines, payload,
     debitTotal,
     creditTotal,
     amount: debitTotal,
-    lines: cleanLines,
-    ...(payload || {})
+    lines: cleanLines
   };
   const result = await client.query(
     "INSERT INTO app_records (collection, payload) VALUES ('journals', $1) RETURNING id",
@@ -2007,9 +2008,20 @@ async function approveCashierPayment(client, body) {
     cashAccountCode: body.cashAccountCode || "1611",
     memo: body.memo || ""
   };
+  const receiptJournalId = await postReceipt(client, {
+    customerName: invoice.payload.customerName,
+    amount: payment.amount,
+    receiptType: payment.receiptType,
+    paymentMethod: payment.paymentMethod,
+    cashAccountCode: payment.cashAccountCode,
+    accountCode: "151",
+    memo: payment.memo || `قبض فاتورة ${invoice.payload.invoiceNo || invoice.id}`,
+    date: payment.date
+  });
   await client.query("INSERT INTO app_records (collection, payload) VALUES ('receipts', $1)", [{
     invoiceId: invoice.id,
     customerName: invoice.payload.customerName,
+    journalId: receiptJournalId,
     ...payment
   }]);
   const existingOrder = await client.query("SELECT id FROM app_records WHERE collection='supplyOrders' AND payload->>'invoiceId'=$1 LIMIT 1", [String(invoice.id)]);
@@ -2041,37 +2053,10 @@ async function approveCashierPayment(client, body) {
 }
 
 async function postInvoiceFinalAccounting(client, invoicePayload, supplyOrderId, issued) {
-  const groupedRevenue = new Map();
-  for (const line of invoicePayload.lines || []) {
-    const accountCode = revenueAccountCode(line);
-    groupedRevenue.set(accountCode, num(groupedRevenue.get(accountCode)) + num(line.total));
-  }
-  const salesJournalId = await postBalancedJournal(client, {
-    memo: `Sales invoice ${invoicePayload.invoiceNo} - ${invoicePayload.customerName}`,
-    source: "Sales Invoice Final Posting",
-    date: invoicePayload.date,
-    currency: invoicePayload.currency,
-    exchangeRate: invoicePayload.exchangeRate,
-    lines: [
-      { accountCode: "151", debit: num(invoicePayload.total), credit: 0, note: invoicePayload.customerName },
-      ...Array.from(groupedRevenue.entries()).map(([accountCode, amount]) => ({ accountCode, debit: 0, credit: amount, note: invoicePayload.invoiceNo }))
-    ],
-    payload: { invoiceId: invoicePayload.id, supplyOrderId }
-  });
-  const collected = num(invoicePayload.paidAmount || 0);
-  let receiptJournalId = null;
-  if (collected > 0) {
-    receiptJournalId = await postJournal(client, {
-      memo: `Receipt posting for invoice ${invoicePayload.invoiceNo}`,
-      debitCode: "1611",
-      creditCode: "151",
-      amount: collected,
-      source: "Receipt Final Posting",
-      date: invoicePayload.date,
-      payload: { invoiceId: invoicePayload.id }
-    });
-  }
-  return { salesJournalId, receiptJournalId };
+  // Sales journal was already created by postSalesInvoice at invoice creation time.
+  // Receipt journal was already created by approveCashierPayment at payment time.
+  // Nothing to post here — journals are tracked on their respective records.
+  return {};
 }
 
 async function processSupplyOrderWorkflow(client, body) {
@@ -2624,7 +2609,7 @@ async function handleApi(req, res) {
       sessions.set(token, { username: user.username, role: user.role, expiresAt: Date.now() + SESSION_TTL_MS });
       await audit(user.username, "LOGIN", "Successful login");
       return sendJson(res, 200, { ok: true, user: { username: user.username, name: user.name, role: user.role } }, {
-        "Set-Cookie": `session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`
+        "Set-Cookie": `session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`
       });
     }
 
@@ -2663,6 +2648,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/dashboard") {
+      if (!(await requirePermission(session, "accounting.view"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       return sendJson(res, 200, await buildDashboardReport());
     }
 
@@ -2872,6 +2858,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/upsert") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const id = await withTransaction(async (client) => {
         const savedId = await upsertRecord(client, body.collection, body.record || {});
@@ -2882,6 +2869,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/post-finance") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const id = await withTransaction(async (client) => {
         const journalId = await postFinance(client, body);
@@ -2892,6 +2880,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/sales-invoice") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const output = await withTransaction(async (client) => {
         const posted = await executePostingPipeline(client, {
@@ -2913,6 +2902,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/invoice-payment") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const result = await withTransaction(async (client) => {
         const posted = await executePostingPipeline(client, {
@@ -2940,6 +2930,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/process-supply-order") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const result = await withTransaction(async (client) => {
         const posted = await executePostingPipeline(client, {
@@ -2962,6 +2953,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/receipts") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const id = await withTransaction(async (client) => {
         const journalId = await postReceipt(client, body);
@@ -2972,6 +2964,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/opening-journal") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const id = await withTransaction(async (client) => {
         const journalId = await postOpeningJournal(client, body);
@@ -2982,6 +2975,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/opening-inventory") {
+      if (!(await requirePermission(session, "accounting.post"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const body = await readBody(req);
       const id = await withTransaction(async (client) => {
         const journalId = await postOpeningInventory(client, body);
@@ -3048,7 +3042,7 @@ async function handleApi(req, res) {
     try {
       await audit("system", "ERROR", error.message);
     } catch {}
-    return sendJson(res, 500, { error: "SERVER_ERROR", detail: error.message });
+    return sendJson(res, 500, { error: "SERVER_ERROR" });
   }
 }
 
@@ -3097,7 +3091,6 @@ async function start() {
     });
     console.log(`Production ERP with PostgreSQL running on http://0.0.0.0:${PORT}`);
     console.log(`Health check: http://0.0.0.0:${PORT}/api/health`);
-    console.log("Default login: admin / ChangeMe-12345");
   });
 }
 
