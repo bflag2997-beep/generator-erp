@@ -535,6 +535,43 @@ async function initDb() {
     );
   }
 
+  // migration 5: database-level balance trigger — any commit that leaves a
+  // journal_entry with lines where SUM(debit) ≠ SUM(credit) is rolled back.
+  await pool.query(
+    `INSERT INTO schema_migrations (version, name)
+     VALUES (5, 'journal_balance_trigger')
+     ON CONFLICT (version) DO NOTHING`
+  );
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION enforce_journal_balance()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      v_entry_id BIGINT;
+      v_count    INT;
+      v_debit    NUMERIC;
+      v_credit   NUMERIC;
+    BEGIN
+      v_entry_id := COALESCE(NEW.journal_entry_id, OLD.journal_entry_id);
+      SELECT COUNT(*), COALESCE(SUM(debit),0), COALESCE(SUM(credit),0)
+        INTO v_count, v_debit, v_credit
+        FROM journal_lines
+       WHERE journal_entry_id = v_entry_id;
+      IF v_count > 0 AND ABS(v_debit - v_credit) > 0.001 THEN
+        RAISE EXCEPTION 'القيد رقم % غير متوازن: مجموع المدين=% مجموع الدائن=%',
+          v_entry_id, v_debit, v_credit;
+      END IF;
+      RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await pool.query(`DROP TRIGGER IF EXISTS trg_journal_balance ON journal_lines`);
+  await pool.query(`
+    CREATE CONSTRAINT TRIGGER trg_journal_balance
+    AFTER INSERT OR UPDATE OR DELETE ON journal_lines
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION enforce_journal_balance()
+  `);
+
   const userCount = Number((await pool.query("SELECT count(*) AS count FROM users")).rows[0].count);
   if (!userCount) {
     const password = createPassword("ChangeMe-12345");
@@ -2699,6 +2736,22 @@ async function handleApi(req, res) {
         dateTo: url.searchParams.get("dateTo")
       });
       return sendJson(res, 200, report);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/unbalanced-journals") {
+      if (!(await requirePermission(session, "users.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const rows = await pool.query(`
+        SELECT je.id, je.entry_date AS "entryDate", je.source, je.memo, je.status,
+               COALESCE(SUM(jl.debit),0)::float8  AS debit,
+               COALESCE(SUM(jl.credit),0)::float8 AS credit,
+               ABS(COALESCE(SUM(jl.debit),0) - COALESCE(SUM(jl.credit),0))::float8 AS diff
+          FROM journal_entries je
+          LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
+         GROUP BY je.id, je.entry_date, je.source, je.memo, je.status
+        HAVING ABS(COALESCE(SUM(jl.debit),0) - COALESCE(SUM(jl.credit),0)) > 0.001
+         ORDER BY je.id DESC
+      `);
+      return sendJson(res, 200, { count: rows.rowCount, rows: rows.rows });
     }
 
     if (req.method === "GET" && url.pathname === "/api/financial-statements") {
