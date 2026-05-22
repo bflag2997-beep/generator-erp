@@ -10,9 +10,11 @@ let inventoryTraceReport = null;
 let accountTreeExpanded = new Set();
 let accountCodeValidationOk = true;
 let financialReports = null;
+let companyLogoData = null;
 
 const $ = (id) => document.getElementById(id);
 const money = (value) => new Intl.NumberFormat("ar-IQ", { maximumFractionDigits: 0 }).format(Number(value || 0));
+const esc = (str) => String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const emptyRow = "<tr><td>لا توجد بيانات</td></tr>";
 function notify(message, type = "ok") {
   const container = $("toastContainer");
@@ -54,19 +56,30 @@ async function api(path, options = {}) {
     ...options
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || body.error || "فشل الطلب");
+  if (!response.ok) {
+    const errorMap = {
+      UNAUTHENTICATED: "انتهت جلستك. أعد تسجيل الدخول.",
+      FORBIDDEN: "ليس لديك صلاحية لهذا الإجراء.",
+      ACCOUNT_LOCKED: "تم قفل الحساب بعد محاولات دخول متعددة. تواصل مع الأدمن.",
+      INVALID_LOGIN: "اسم المستخدم أو كلمة المرور غير صحيحة.",
+      NOT_FOUND: "السجل المطلوب غير موجود.",
+    };
+    const message = errorMap[body.error] || body.detail || body.error || "حدث خطأ في الطلب";
+    throw new Error(message);
+  }
   return body;
 }
 
 async function loadState() {
   state = await api("/api/state");
   render();
+  loadCompanyLogo().catch(() => {});
 }
 
 async function loadAudit() {
   const rows = await api("/api/audit");
   $("auditLog").innerHTML = rows.slice(0, 50).map((row) => `
-    <div><strong>${row.action}</strong><br><span>${row.user} - ${new Date(row.at).toLocaleString("ar-IQ")}</span><br><small>${row.detail || ""}</small></div>
+    <div><strong>${esc(row.action)}</strong><br><span>${esc(row.user)} - ${new Date(row.at).toLocaleString("ar-IQ")}</span><br><small>${esc(row.detail)}</small></div>
   `).join("") || "<p>لا توجد حركة بعد</p>";
 }
 
@@ -79,6 +92,72 @@ async function loadDashboard() {
 async function loadUsersPermissions() {
   usersPermissions = await api("/api/users-permissions");
   renderUsersPermissions();
+}
+
+async function loadCompanyLogo() {
+  try {
+    const result = await api("/api/company-logo");
+    companyLogoData = result.data || null;
+  } catch {
+    companyLogoData = null;
+  }
+  renderCompanyLogoPreview();
+}
+
+function renderCompanyLogoPreview() {
+  const preview = $("companyLogoPreview");
+  if (!preview) return;
+  if (companyLogoData) {
+    preview.innerHTML = `<img src="${esc(companyLogoData)}" alt="شعار الشركة" style="max-height:80px;max-width:200px;" />`;
+  } else {
+    preview.innerHTML = "<span>لم يُرفع شعار بعد</span>";
+  }
+  const logo = $("journalPrintLogo");
+  if (logo) {
+    logo.src = companyLogoData || "";
+    logo.style.display = companyLogoData ? "block" : "none";
+  }
+}
+
+async function loadJournalPreview(journalId) {
+  if (!journalId) return;
+  const entry = await api(`/api/journal/${journalId}`);
+  const modal = $("journalPreviewModal");
+  const isBalanced = Math.abs(entry.totals.debit - entry.totals.credit) < 0.01;
+
+  $("journalPrintMeta").innerHTML = `
+    <div><strong>رقم القيد:</strong> ${esc(String(entry.id))}</div>
+    <div><strong>التاريخ:</strong> ${esc(entry.entryDate || "")}</div>
+    <div><strong>المصدر:</strong> ${esc(entry.source || "")}</div>
+    <div><strong>البيان:</strong> ${esc(entry.memo || "")}</div>
+    <div><strong>العملة:</strong> ${esc(entry.currency || "IQD")} - سعر الصرف: ${Number(entry.exchangeRate || 1).toFixed(4)}</div>
+    <div><strong>الحالة:</strong> ${esc(entry.status || "")}</div>
+  `;
+
+  $("journalPrintLines").innerHTML = (entry.lines || []).map((line) => `
+    <tr>
+      <td>${esc(line.accountCode)}</td>
+      <td>${esc(line.accountName || line.accountCode)}</td>
+      <td>${esc(line.note)}</td>
+      <td class="amount-cell">${line.debit > 0 ? money(line.debit) : ""}</td>
+      <td class="amount-cell">${line.credit > 0 ? money(line.credit) : ""}</td>
+    </tr>
+  `).join("") || "<tr><td colspan='5'>لا توجد سطور</td></tr>";
+
+  $("journalPrintDebit").textContent = money(entry.totals.debit);
+  $("journalPrintCredit").textContent = money(entry.totals.credit);
+
+  const balanceStatus = $("journalBalanceStatus");
+  if (isBalanced) {
+    balanceStatus.textContent = "✓ القيد متوازن";
+    balanceStatus.className = "journal-balance-status balanced";
+  } else {
+    balanceStatus.textContent = `⚠ القيد غير متوازن - الفرق: ${money(Math.abs(entry.totals.debit - entry.totals.credit))}`;
+    balanceStatus.className = "journal-balance-status unbalanced";
+  }
+
+  renderCompanyLogoPreview();
+  modal.showModal();
 }
 
 function showModule(targetId = "homePanel") {
@@ -153,10 +232,16 @@ function selectLedgerAccount(code, name) {
 function renderOpeningLines() {
   const debitTotal = openingLines.reduce((sum, line) => sum + Number(line.debit || 0), 0);
   const creditTotal = openingLines.reduce((sum, line) => sum + Number(line.credit || 0), 0);
-  $("openingJournalSummary").textContent = `المدين: ${money(debitTotal)} | الدائن: ${money(creditTotal)} | الفرق: ${money(debitTotal - creditTotal)}`;
+  const diff = debitTotal - creditTotal;
+  const isBalanced = openingLines.length > 0 && Math.abs(diff) < 0.001;
+  const summary = $("openingJournalSummary");
+  summary.textContent = `المدين: ${money(debitTotal)} | الدائن: ${money(creditTotal)} | الفرق: ${money(diff)}`;
+  summary.className = openingLines.length === 0 ? "" : isBalanced ? "balance-ok" : "balance-error";
+  const submitBtn = $("openingJournalForm")?.querySelector("button[type=submit]");
+  if (submitBtn) submitBtn.disabled = openingLines.length > 0 && !isBalanced;
   $("openingLinesTable").innerHTML = openingLines.map((line, index) => `
     <tr>
-      <td><strong>${line.accountCode}</strong><br>مدين: ${money(line.debit)} | دائن: ${money(line.credit)}<br>${line.note || ""}</td>
+      <td><strong>${esc(line.accountCode)}</strong><br>مدين: ${money(line.debit)} | دائن: ${money(line.credit)}<br>${esc(line.note)}</td>
       <td><button type="button" class="secondary remove-opening-line" data-index="${index}">حذف</button></td>
     </tr>
   `).join("") || emptyRow;
@@ -166,7 +251,7 @@ function renderSaleLines() {
   const total = saleLines.reduce((sum, line) => sum + Number(line.total || 0), 0);
   $("saleLinesTable").innerHTML = saleLines.map((line, index) => `
     <tr>
-      <td><strong>${line.sku} - ${line.name || ""}</strong><br>${money(line.qty)} × ${money(line.unitPrice)} = ${money(line.total)}</td>
+      <td><strong>${esc(line.sku)} - ${esc(line.name)}</strong><br>${money(line.qty)} × ${money(line.unitPrice)} = ${money(line.total)}</td>
       <td><button type="button" class="secondary remove-sale-line" data-index="${index}">حذف</button></td>
     </tr>
   `).join("") || `<tr><td>لا توجد مواد في الفاتورة</td></tr>`;
@@ -180,15 +265,15 @@ function renderSalesWorkflow() {
   });
   if ($("openInvoiceDatalist")) {
     $("openInvoiceDatalist").innerHTML = openInvoices.map((row) => `
-      <option value="${row.id} - ${row.invoiceNo || row.id} - ${row.customerName || ""} - المتبقي ${money(row.balance)}"></option>
+      <option value="${esc(row.id)} - ${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)} - المتبقي ${money(row.balance)}"></option>
     `).join("");
   }
 
   $("supplyOrdersList").innerHTML = (state.supplyOrders || []).map((row) => `
     <div class="workflow-item">
-      <strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong>
-      <span>${row.workflowStage || row.status || ""}</span>
-      <small>${(row.lines || []).map((line) => `${line.sku}: ${money(line.qty)}`).join(" | ")}</small>
+      <strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong>
+      <span>${esc(row.workflowStage || row.status)}</span>
+      <small>${(row.lines || []).map((line) => `${esc(line.sku)}: ${money(line.qty)}`).join(" | ")}</small>
       <button type="button" class="secondary process-supply-order" data-id="${row.id}">تنفيذ أمر التجهيز</button>
     </div>
   `).join("") || "<p>لا توجد أوامر تجهيز حاليا</p>";
@@ -300,7 +385,7 @@ function renderBars(rows, targetId) {
     const value = Number(row.value || row.qty || 0);
     return `
       <div class="bar-row">
-        <span>${row.label || row.name || row.sku || "غير محدد"}</span>
+        <span>${esc(row.label || row.name || row.sku || "غير محدد")}</span>
         <div><i style="width:${Math.max(4, (value / max) * 100)}%"></i></div>
         <b>${money(value)}</b>
       </div>
@@ -370,10 +455,10 @@ function renderDashboard() {
   renderBars((sales.topCustomers || []).slice(0, 5), "topCustomersChart");
   renderLineChart((sales.salesByMonth || []).slice(-6), "monthlySalesChart");
   $("maintenanceWarnings").innerHTML = (maintenance.overdueContracts || []).slice(0, 5).map((row) => `
-    <div><strong>${row.invoiceNo || row.id || "طلب"}</strong><span>${row.status || ""}</span></div>
+    <div><strong>${esc(row.invoiceNo || row.id || "طلب")}</strong><span>${esc(row.status)}</span></div>
   `).join("") || "<p>لا توجد تنبيهات صيانة حالياً</p>";
   $("lowStockList").innerHTML = (inventory.lowStock || []).slice(0, 6).map((item) => `
-    <div><strong>${item.sku} - ${item.name}</strong><span>المتوفر: ${money(item.qty)}</span></div>
+    <div><strong>${esc(item.sku)} - ${esc(item.name)}</strong><span>المتوفر: ${money(item.qty)}</span></div>
   `).join("") || "<p>لا توجد أصناف منخفضة حالياً</p>";
   renderBars((inventory.topMovingParts || []).map((row) => ({
     label: `${row.sku || ""} ${row.name || ""}`.trim(),
@@ -404,7 +489,7 @@ function renderHomeDashboard() {
   `).join("") || "<p>لا توجد حركة شهرية بعد</p>";
 
   $("homeLowStock").innerHTML = (inventory.lowStock || []).slice(0, 5).map((item) => `
-    <div><strong>${item.sku} - ${item.name}</strong><span>المتوفر: ${money(item.qty)}</span></div>
+    <div><strong>${esc(item.sku)} - ${esc(item.name)}</strong><span>المتوفر: ${money(item.qty)}</span></div>
   `).join("") || "<p>لا توجد تنبيهات مخزون حالياً</p>";
 }
 
@@ -433,8 +518,8 @@ function renderUsersPermissions() {
   `).join("") || "<p>لا توجد صلاحيات معرفة</p>";
   $("usersTable").innerHTML = (usersPermissions.users || []).map((user) => `
     <tr>
-      <td><strong>${user.name}</strong><br>${user.username}</td>
-      <td>${user.role}</td>
+      <td><strong>${esc(user.name)}</strong><br>${esc(user.username)}</td>
+      <td>${esc(user.role)}</td>
       <td>${user.active ? "مفعل" : "موقوف"}</td>
       <td><button type="button" class="secondary edit-user" data-id="${user.id}">تعديل</button></td>
     </tr>
@@ -525,56 +610,85 @@ function render() {
   syncCurrencyFields(document);
 
   $("customersTable").innerHTML = state.customers.map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.phone || ""}<br>${row.address || ""}<br>${row.sector || "غير مصنف"}${row.customerKind ? " / " + row.customerKind : ""}</td></tr>
+    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.phone)}<br>${esc(row.address)}<br>${esc(row.sector || "غير مصنف")}${row.customerKind ? " / " + esc(row.customerKind) : ""}</td></tr>
   `).join("") || emptyRow;
 
   $("suppliersTable").innerHTML = state.suppliers.map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.phone || ""}<br>${row.type || ""}</td></tr>
+    <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.phone)}<br>${esc(row.type)}</td></tr>
   `).join("") || emptyRow;
 
   $("itemsTable").innerHTML = state.items.map((row) => `
-    <tr><td><strong>${row.sku} - ${row.name}</strong><br>${row.category || ""} / ${row.brand || ""}<br>كمية: ${money(row.qty)} - كلفة: ${money(row.cost)}</td></tr>
+    <tr><td><strong>${esc(row.sku)} - ${esc(row.name)}</strong><br>${esc(row.category)} / ${esc(row.brand)}<br>كمية: ${money(row.qty)} - كلفة: ${money(row.cost)}</td></tr>
   `).join("") || emptyRow;
 
   $("salesTable").innerHTML = (state.sales || []).map((row) => `
-    <tr><td><strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong><br>${row.status || ""}<br>الإجمالي: ${money(row.total)} | المقبوض: ${money(row.paidAmount)} | المتبقي: ${money(row.balance)}</td></tr>
+    <tr><td><strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong><br>${esc(row.status)}<br>الإجمالي: ${money(row.total)} | المقبوض: ${money(row.paidAmount)} | المتبقي: ${money(row.balance)}</td></tr>
   `).join("") || emptyRow;
 
   $("supplyOrdersTable").innerHTML = (state.supplyOrders || []).map((row) => `
-    <tr><td><strong>${row.invoiceNo || row.id} - ${row.customerName || ""}</strong><br>${row.status || ""}<br>${(row.lines || []).map((line) => `${line.sku}: ${money(line.qty)}`).join(" | ")}</td></tr>
+    <tr><td><strong>${esc(row.invoiceNo || row.id)} - ${esc(row.customerName)}</strong><br>${esc(row.status)}<br>${(row.lines || []).map((line) => `${esc(line.sku)}: ${money(line.qty)}`).join(" | ")}</td></tr>
   `).join("") || emptyRow;
 
   $("purchaseRequestsTable").innerHTML = (state.purchaseRequests || []).map((row) => `
-    <tr><td><strong>طلب شراء للفاتورة ${row.invoiceNo || ""}</strong><br>${row.status || ""}<br>${(row.lines || []).map((line) => `${line.sku}: ناقص ${money(line.missingQty)}`).join(" | ")}</td></tr>
+    <tr><td><strong>طلب شراء للفاتورة ${esc(row.invoiceNo)}</strong><br>${esc(row.status)}<br>${(row.lines || []).map((line) => `${esc(line.sku)}: ناقص ${money(line.missingQty)}`).join(" | ")}</td></tr>
   `).join("") || emptyRow;
 
   $("receiptsTable").innerHTML = (state.receipts || []).map((row) => `
-    <tr><td><strong>${row.customerName || "-"}</strong><br>${row.receiptType || ""} - ${row.paymentMethod || ""}<br>${money(row.amount)} | قيد ${row.journalId || ""}</td></tr>
+    <tr><td><strong>${esc(row.customerName || "-")}</strong><br>${esc(row.receiptType)} - ${esc(row.paymentMethod)}<br>${money(row.amount)} | قيد ${esc(row.journalId)}</td></tr>
   `).join("") || emptyRow;
 
   $("openingJournalsTable").innerHTML = (state.openingJournals || []).map((row) => `
-    <tr><td><strong>${row.memo || "قيد افتتاحي"}</strong><br>${row.date || ""}<br>قيد ${row.journalId || ""}</td></tr>
+    <tr><td><strong>${esc(row.memo || "قيد افتتاحي")}</strong><br>${esc(row.date)}<br>قيد ${esc(row.journalId)}</td></tr>
   `).join("") || emptyRow;
 
   $("openingInventoryTable").innerHTML = (state.openingInventory || []).map((row) => `
-    <tr><td><strong>${row.sku} - ${row.name}</strong><br>${row.brand || ""} / ${row.category || ""}<br>${money(row.qty)} × ${money(row.cost)} = ${money(row.amount)}</td></tr>
+    <tr><td><strong>${esc(row.sku)} - ${esc(row.name)}</strong><br>${esc(row.brand)} / ${esc(row.category)}<br>${money(row.qty)} × ${money(row.cost)} = ${money(row.amount)}</td></tr>
   `).join("") || emptyRow;
 
   $("payrollsTable").innerHTML = (state.payrolls || []).map((row) => `
-    <tr><td><strong>${row.employeeName || "-"}</strong><br>${row.kind || ""} - ${money(row.amount)}<br>${row.memo || ""}</td></tr>
+    <tr><td><strong>${esc(row.employeeName || "-")}</strong><br>${esc(row.kind)} - ${money(row.amount)}<br>${esc(row.memo)}</td></tr>
   `).join("") || emptyRow;
 
   $("maintenanceRevenuesTable").innerHTML = (state.maintenanceRevenues || []).map((row) => `
-    <tr><td><strong>${row.customerName || "-"}</strong><br>${row.paymentStatus || ""} - ${money(row.amount)}<br>${row.memo || ""}</td></tr>
+    <tr><td><strong>${esc(row.customerName || "-")}</strong><br>${esc(row.paymentStatus)} - ${money(row.amount)}<br>${esc(row.memo)}</td></tr>
   `).join("") || emptyRow;
 
   $("fixedAssetsTable").innerHTML = (state.fixedAssets || []).map((row) => `
-    <tr><td><strong>${row.assetType || ""} - ${row.assetName || "-"}</strong><br>${money(row.amount)}<br>حساب ${row.accountCode || ""}</td></tr>
+    <tr><td><strong>${esc(row.assetType)} - ${esc(row.assetName || "-")}</strong><br>${money(row.amount)}<br>حساب ${esc(row.accountCode)}</td></tr>
   `).join("") || emptyRow;
 
-  $("invoiceTemplatesTable").innerHTML = (state.invoiceTemplates || []).map((row) => `
-    <tr><td><strong>${row.name}</strong><br>${row.originalFilename}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
-  `).join("") || "<tr><td>لا توجد قوالب</td></tr>";
+  const templates = state.invoiceTemplates || [];
+  const activeTemplate = templates.find((t) => t.active);
+  const badge = $("activeTemplateBadge");
+  if (badge) {
+    if (activeTemplate) {
+      badge.textContent = `القالب النشط: ${activeTemplate.name}`;
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+  const tbl2 = $("invoiceTemplatesTable2");
+  if (tbl2) {
+    tbl2.innerHTML = templates.map((row) => `
+      <tr>
+        <td><strong>${esc(row.name)}</strong></td>
+        <td>${esc(row.originalFilename)}</td>
+        <td>${new Date(row.createdAt).toLocaleString("ar-IQ")}</td>
+        <td>${row.active ? "<span class=\"badge-active\">نشط</span>" : ""}</td>
+        <td>
+          <button type="button" class="secondary tiny activate-template-btn" data-id="${row.id}">${row.active ? "نشط" : "تفعيل"}</button>
+          <a class="secondary tiny btn-link" href="/api/invoice-templates/${row.id}/download">تنزيل</a>
+        </td>
+      </tr>
+    `).join("") || "<tr><td colspan='5'>لا توجد قوالب</td></tr>";
+  }
+  const tbl1 = $("invoiceTemplatesTable");
+  if (tbl1) {
+    tbl1.innerHTML = templates.map((row) => `
+      <tr><td><strong>${esc(row.name)}</strong><br>${esc(row.originalFilename)}<br>${new Date(row.createdAt).toLocaleString("ar-IQ")}<br><a href="/api/invoice-templates/${row.id}/download">تنزيل القالب</a></td></tr>
+    `).join("") || "<tr><td>لا توجد قوالب</td></tr>";
+  }
 }
 
 function renderLedger(ledger) {
@@ -582,11 +696,11 @@ function renderLedger(ledger) {
   $("ledgerSummary").textContent = `${ledger.account.code} - ${ledger.account.name} | مجموع المدين: ${money(ledger.totals.debit)} | مجموع الدائن: ${money(ledger.totals.credit)} | الرصيد: ${money(ledger.totals.balance)}`;
   $("ledgerTable").innerHTML = (ledger.rows || []).map((row) => `
     <tr>
-      <td>${row.date || ""}</td>
-      <td>${row.journalId || ""}<br>${row.source || ""}</td>
-      <td>${row.memo || ""}</td>
-      <td>${money(row.debit)}</td>
-      <td>${money(row.credit)}</td>
+      <td>${esc(row.date)}</td>
+      <td>${row.journalId ? `<button type="button" class="link-btn view-journal-btn" data-id="${row.journalId}">${esc(String(row.journalId))}</button>` : ""}<br><small>${esc(row.source)}</small></td>
+      <td>${esc(row.memo)}</td>
+      <td>${row.debit > 0 ? money(row.debit) : ""}</td>
+      <td>${row.credit > 0 ? money(row.credit) : ""}</td>
       <td><strong>${money(row.balance)}</strong></td>
     </tr>
   `).join("") || "<tr><td colspan=\"6\">لا توجد حركة على هذا الحساب</td></tr>";
@@ -840,7 +954,7 @@ $("fixedAssetForm").addEventListener("submit", async (event) => {
   event.currentTarget.reset();
 });
 
-$("invoiceTemplateForm").addEventListener("submit", async (event) => {
+$("invoiceTemplateUploadForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const data = formObject(form);
@@ -862,9 +976,57 @@ $("invoiceTemplateForm").addEventListener("submit", async (event) => {
       }
     })
   });
+  notify("تم رفع القالب بنجاح", "ok");
   form.reset();
   await loadState();
   await loadAudit();
+});
+
+document.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".activate-template-btn");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  await api(`/api/invoice-templates/${id}/activate`, { method: "POST", body: JSON.stringify({}) });
+  notify("تم تفعيل القالب", "ok");
+  await loadState();
+});
+
+$("saveCompanyLogoBtn")?.addEventListener("click", async () => {
+  const file = $("companyLogoInput")?.files[0];
+  if (!file) return alert("اختر صورة الشعار");
+  const logoBase64 = await fileToBase64(file);
+  await api("/api/company-logo", { method: "POST", body: JSON.stringify({ logoBase64 }) });
+  companyLogoData = logoBase64;
+  renderCompanyLogoPreview();
+  notify("تم حفظ شعار الشركة", "ok");
+});
+
+$("removeCompanyLogoBtn")?.addEventListener("click", async () => {
+  if (!confirm("هل تريد حذف شعار الشركة؟")) return;
+  await api("/api/company-logo", { method: "POST", body: JSON.stringify({ logoBase64: "" }) });
+  companyLogoData = null;
+  renderCompanyLogoPreview();
+  notify("تم حذف الشعار", "ok");
+});
+
+$("closeJournalPreviewBtn")?.addEventListener("click", () => {
+  $("journalPreviewModal")?.close();
+});
+
+$("printJournalBtn")?.addEventListener("click", () => {
+  window.print();
+});
+
+document.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".view-journal-btn");
+  if (!btn) return;
+  const journalId = Number(btn.dataset.id);
+  if (!journalId) return;
+  try {
+    await loadJournalPreview(journalId);
+  } catch (error) {
+    notify(error.message || "تعذر تحميل بيانات القيد", "error");
+  }
 });
 
 $("userForm").addEventListener("submit", async (event) => {
@@ -1139,7 +1301,12 @@ function renderFinancialReports() {
       <td>${money(row.balance)}</td>
     </tr>
   `).join("") || "<tr><td colspan=\"5\">لا توجد بيانات</td></tr>";
-  $("trialBalanceSummary").textContent = `مجموع المدين: ${money(trial.totals?.debit || 0)} | مجموع الدائن: ${money(trial.totals?.credit || 0)} | الفرق: ${money(trial.totals?.balance || 0)}`;
+  const tbDebit = trial.totals?.debit || 0;
+  const tbCredit = trial.totals?.credit || 0;
+  const tbDiff = Math.abs(tbDebit - tbCredit);
+  const tbSummary = $("trialBalanceSummary");
+  tbSummary.textContent = `مجموع المدين: ${money(tbDebit)} | مجموع الدائن: ${money(tbCredit)} | الفرق: ${money(tbDiff)}`;
+  tbSummary.className = tbDiff < 0.01 ? "balance-ok" : "balance-error";
 
   const income = financialReports.statements?.incomeStatement?.totals || {};
   $("incomeStatementSummary").textContent = `قائمة الدخل | الإيرادات: ${money(income.revenues || 0)} | المصروفات: ${money(income.expenses || 0)} | صافي الربح: ${money(income.netProfit || 0)}`;

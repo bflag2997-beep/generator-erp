@@ -507,14 +507,70 @@ async function initDb() {
      ON CONFLICT (version) DO NOTHING`
   );
 
+  // migration 4: fix posting_mode for all system accounts based on level
+  await pool.query(
+    `INSERT INTO schema_migrations (version, name)
+     VALUES (4, 'fix_system_account_posting_mode')
+     ON CONFLICT (version) DO NOTHING`
+  );
+  await pool.query(`
+    UPDATE accounts
+    SET posting_mode = CASE level
+      WHEN 'إجمالي' THEN 'view'
+      WHEN 'رئيسي' THEN 'header'
+      ELSE 'transaction'
+    END
+    WHERE is_system = true
+      AND posting_mode IN ('header', 'view')
+      AND level IN ('فرعي', 'تحليلي')
+  `);
+
   for (const [code, name, type, level] of defaultAccounts) {
+    const postingMode = (level === "إجمالي") ? "view" : (level === "رئيسي") ? "header" : "transaction";
     await pool.query(
       `INSERT INTO accounts (code, name, type, level, is_system, posting_mode)
-       VALUES ($1, $2, $3, $4, true, 'header')
-       ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type, level=EXCLUDED.level, is_system=true`,
-      [code, name, type, level]
+       VALUES ($1, $2, $3, $4, true, $5)
+       ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type, level=EXCLUDED.level, is_system=true, posting_mode=EXCLUDED.posting_mode`,
+      [code, name, type, level, postingMode]
     );
   }
+
+  // migration 5: database-level balance trigger — any commit that leaves a
+  // journal_entry with lines where SUM(debit) ≠ SUM(credit) is rolled back.
+  await pool.query(
+    `INSERT INTO schema_migrations (version, name)
+     VALUES (5, 'journal_balance_trigger')
+     ON CONFLICT (version) DO NOTHING`
+  );
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION enforce_journal_balance()
+    RETURNS TRIGGER AS $$
+    DECLARE
+      v_entry_id BIGINT;
+      v_count    INT;
+      v_debit    NUMERIC;
+      v_credit   NUMERIC;
+    BEGIN
+      v_entry_id := COALESCE(NEW.journal_entry_id, OLD.journal_entry_id);
+      SELECT COUNT(*), COALESCE(SUM(debit),0), COALESCE(SUM(credit),0)
+        INTO v_count, v_debit, v_credit
+        FROM journal_lines
+       WHERE journal_entry_id = v_entry_id;
+      IF v_count > 0 AND ABS(v_debit - v_credit) > 0.001 THEN
+        RAISE EXCEPTION 'القيد رقم % غير متوازن: مجموع المدين=% مجموع الدائن=%',
+          v_entry_id, v_debit, v_credit;
+      END IF;
+      RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await pool.query(`DROP TRIGGER IF EXISTS trg_journal_balance ON journal_lines`);
+  await pool.query(`
+    CREATE CONSTRAINT TRIGGER trg_journal_balance
+    AFTER INSERT OR UPDATE OR DELETE ON journal_lines
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION enforce_journal_balance()
+  `);
 
   const userCount = Number((await pool.query("SELECT count(*) AS count FROM users")).rows[0].count);
   if (!userCount) {
@@ -705,13 +761,11 @@ async function normalizeJournalCurrency(client, currencyInput, exchangeRateInput
 }
 
 async function stateFromDb() {
-  const [accounts, users, customers, suppliers, items, auditRows, records, templates, settings, exchangeRates] = await Promise.all([
+  const [accounts, customers, suppliers, items, records, templates, settings, exchangeRates] = await Promise.all([
     pool.query("SELECT account_id AS id, code, name, type, level, parent_code AS \"parentCode\", parent_id AS \"parentId\", currency, nature, classification, level_no AS \"levelNo\", posting_mode AS \"postingMode\", active, is_system AS \"isSystem\" FROM accounts WHERE active=true ORDER BY length(code), code"),
-    pool.query("SELECT id, name, username, role, active, failed_attempts AS \"failedAttempts\", created_at AS \"createdAt\" FROM users ORDER BY id"),
     pool.query("SELECT id, name, phone, address, type, data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM customers ORDER BY id"),
     pool.query("SELECT id, name, phone, address, type, data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM suppliers ORDER BY id"),
     pool.query("SELECT id, sku, name, category, brand, spec, qty::float8 AS qty, cost::float8 AS cost, sale_price::float8 AS \"salePrice\", data, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM items ORDER BY id"),
-    pool.query("SELECT at, username AS user, action, detail FROM audit_log ORDER BY id DESC LIMIT 200"),
     pool.query("SELECT id, collection, payload, created_at AS \"createdAt\", updated_at AS \"updatedAt\" FROM app_records ORDER BY id"),
     pool.query("SELECT id, name, original_filename AS \"originalFilename\", active, created_by AS \"createdBy\", created_at AS \"createdAt\" FROM invoice_templates ORDER BY id DESC"),
     loadSystemSettings(),
@@ -728,10 +782,8 @@ async function stateFromDb() {
   return {
     meta: { name: "Generator ERP PostgreSQL", storage: "PostgreSQL" },
     accounts: accounts.rows.map((row) => ({ ...row, balance: balances[row.code] || 0 })),
-    users: users.rows,
     settings,
     exchangeRates: exchangeRates.rows,
-    audit: auditRows.rows,
     invoiceTemplates: templates.rows,
     customers: customers.rows.map((row) => ({ ...row, ...(row.data || {}) })),
     suppliers: suppliers.rows.map((row) => ({ ...row, ...(row.data || {}) })),
@@ -955,7 +1007,7 @@ async function saveUser(body) {
       const password = createPassword(String(body.password));
       const result = await pool.query(
         `UPDATE users
-         SET name=$1, username=$2, role=$3, active=$4, password_salt=$5, password_hash=$6, updated_at=now()
+         SET name=$1, username=$2, role=$3, active=$4, password_salt=$5, password_hash=$6, failed_attempts=0, updated_at=now()
          WHERE id=$7 RETURNING id`,
         [name, username, role, active, password.salt, password.hash, Number(body.id)]
       );
@@ -964,7 +1016,7 @@ async function saveUser(body) {
     }
     const result = await pool.query(
       `UPDATE users
-       SET name=$1, username=$2, role=$3, active=$4, updated_at=now()
+       SET name=$1, username=$2, role=$3, active=$4, failed_attempts=0, updated_at=now()
        WHERE id=$5 RETURNING id`,
       [name, username, role, active, Number(body.id)]
     );
@@ -1113,14 +1165,16 @@ async function buildAccountLedger(accountCode, filters = {}) {
 
 async function buildTrialBalance(filters = {}) {
   const params = [];
-  let dateWhere = "1=1";
+  // status and date conditions belong in the JOIN predicate — putting them in WHERE
+  // turns the LEFT JOIN into an effective INNER JOIN and drops accounts with no movements
+  let joinConditions = "je.status = 'POSTED'";
   if (filters.dateFrom) {
     params.push(String(filters.dateFrom));
-    dateWhere += ` AND je.entry_date >= $${params.length}::date`;
+    joinConditions += ` AND je.entry_date >= $${params.length}::date`;
   }
   if (filters.dateTo) {
     params.push(String(filters.dateTo));
-    dateWhere += ` AND je.entry_date <= $${params.length}::date`;
+    joinConditions += ` AND je.entry_date <= $${params.length}::date`;
   }
   const rows = await pool.query(
     `SELECT a.code, a.name, a.type, a.level,
@@ -1128,8 +1182,7 @@ async function buildTrialBalance(filters = {}) {
             COALESCE(SUM(jl.credit),0)::float8 AS credit
      FROM accounts a
      LEFT JOIN journal_lines jl ON jl.account_code = a.code
-     LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
-     WHERE ${dateWhere}
+     LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND ${joinConditions}
      GROUP BY a.code, a.name, a.type, a.level
      ORDER BY length(a.code), a.code`,
     params
@@ -1311,13 +1364,18 @@ async function executePostingPipeline(
 async function insertStructuredJournal(client, appRecordId, journal) {
   const entryDate = journal.date || new Date().toISOString().slice(0, 10);
   await assertPeriodOpen(client, entryDate);
-  const lines = Array.isArray(journal.lines) ? journal.lines : [
+  const rawLines = Array.isArray(journal.lines) ? journal.lines : [
     { accountCode: journal.debitCode, debit: num(journal.amount), credit: 0, note: journal.memo || "" },
     { accountCode: journal.creditCode, debit: 0, credit: num(journal.amount), note: journal.memo || "" }
   ];
-  const debitTotal = lines.reduce((sum, line) => sum + num(line.debit), 0);
-  const creditTotal = lines.reduce((sum, line) => sum + num(line.credit), 0);
-  if (Math.abs(debitTotal - creditTotal) > 0.001) throw new Error("Structured journal is not balanced");
+  // filter BEFORE balance check — invalid lines must not count toward totals
+  const lines = rawLines
+    .map((l) => ({ accountCode: String(l.accountCode || "").trim(), debit: num(l.debit), credit: num(l.credit), note: String(l.note || "") }))
+    .filter((l) => l.accountCode && (l.debit > 0 || l.credit > 0));
+  if (lines.length < 2) throw new Error("القيد يحتاج سطرين صالحين على الأقل بحسابات ومبالغ صحيحة");
+  const debitTotal = lines.reduce((sum, line) => sum + line.debit, 0);
+  const creditTotal = lines.reduce((sum, line) => sum + line.credit, 0);
+  if (Math.abs(debitTotal - creditTotal) > 0.001) throw new Error(`القيد غير متوازن: مدين ${debitTotal.toFixed(3)} دائن ${creditTotal.toFixed(3)}`);
 
   const currency = String(journal.currency || "IQD").toUpperCase();
   const exchangeRate = num(journal.exchangeRate || 1) || 1;
@@ -1338,14 +1396,12 @@ async function insertStructuredJournal(client, appRecordId, journal) {
   const entryId = Number(entry.rows[0].id);
   await client.query("DELETE FROM journal_lines WHERE journal_entry_id=$1", [entryId]);
   for (const line of lines) {
-    const debit = num(line.debit);
-    const credit = num(line.credit);
-    if (!line.accountCode || (debit <= 0 && credit <= 0)) continue;
+    await assertTransactionAccount(client, line.accountCode);
     await client.query(
       `INSERT INTO journal_lines
         (journal_entry_id, account_code, debit, credit, debit_base, credit_base, note)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [entryId, String(line.accountCode), debit, credit, debit * exchangeRate, credit * exchangeRate, line.note || ""]
+      [entryId, line.accountCode, line.debit, line.credit, line.debit * exchangeRate, line.credit * exchangeRate, line.note]
     );
   }
   return entryId;
@@ -1429,6 +1485,8 @@ async function postJournal(client, { memo, debitCode, creditCode, amount, source
   await assertTransactionAccount(client, creditCode);
   const currencyInfo = await normalizeJournalCurrency(client, currency || payload?.currency, exchangeRate || payload?.exchangeRate);
   const journal = {
+    ...(payload || {}),
+    // core fields always override payload — never allow caller to swap accounts or amount
     memo,
     debitCode,
     creditCode,
@@ -1437,7 +1495,7 @@ async function postJournal(client, { memo, debitCode, creditCode, amount, source
     date: date || payload?.date || new Date().toISOString().slice(0, 10),
     currency: currencyInfo.currency,
     exchangeRate: currencyInfo.exchangeRate,
-    ...(payload || {})
+    lines: undefined   // prevent a stray lines array from payload turning a 2-line journal into something else
   };
   const result = await client.query(
     "INSERT INTO app_records (collection, payload) VALUES ('journals', $1) RETURNING id",
@@ -1807,6 +1865,7 @@ async function postInvoicePayment(client, body) {
 
 async function processSupplyOrder(client, body) {
   const order = await loadRecord(client, "supplyOrders", Number(body.orderId));
+  if (order.payload.processedAt) throw new Error("أمر التجهيز نُفِّذ مسبقاً ولا يمكن تنفيذه مرة أخرى");
   const lines = order.payload.lines || [];
   if (!lines.length) throw new Error("Supply order has no lines");
   const issued = [];
@@ -2547,10 +2606,20 @@ async function handleApi(req, res) {
       const body = await readBody(req);
       const result = await pool.query("SELECT * FROM users WHERE username=$1 AND active=true", [body.username]);
       const user = result.rows[0];
-      if (!user || !verifyPassword(user, body.password)) {
-        await audit(body.username || "unknown", "LOGIN_FAILED", "Invalid login");
+      if (!user) {
+        await audit(body.username || "unknown", "LOGIN_FAILED", "User not found");
         return sendJson(res, 403, { error: "INVALID_LOGIN" });
       }
+      if (user.failed_attempts >= 5) {
+        await audit(user.username, "LOGIN_BLOCKED", "Account locked after too many failed attempts");
+        return sendJson(res, 403, { error: "ACCOUNT_LOCKED" });
+      }
+      if (!verifyPassword(user, body.password)) {
+        await pool.query("UPDATE users SET failed_attempts=failed_attempts+1, updated_at=now() WHERE id=$1", [user.id]);
+        await audit(user.username, "LOGIN_FAILED", `Invalid password attempt ${user.failed_attempts + 1}`);
+        return sendJson(res, 403, { error: "INVALID_LOGIN" });
+      }
+      await pool.query("UPDATE users SET failed_attempts=0, updated_at=now() WHERE id=$1", [user.id]);
       const token = crypto.randomBytes(32).toString("hex");
       sessions.set(token, { username: user.username, role: user.role, expiresAt: Date.now() + SESSION_TTL_MS });
       await audit(user.username, "LOGIN", "Successful login");
@@ -2569,10 +2638,13 @@ async function handleApi(req, res) {
     if (!session) return;
 
     if (req.method === "GET" && url.pathname === "/api/state") {
-      return sendJson(res, 200, await stateFromDb());
+      const data = await stateFromDb();
+      if (!(await requirePermission(session, "hr.manage"))) data.payrolls = [];
+      return sendJson(res, 200, data);
     }
 
     if (req.method === "GET" && url.pathname === "/api/audit") {
+      if (!(await requirePermission(session, "users.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const result = await pool.query("SELECT at, username AS user, action, detail FROM audit_log ORDER BY id DESC LIMIT 500");
       return sendJson(res, 200, result.rows);
     }
@@ -2646,6 +2718,7 @@ async function handleApi(req, res) {
     }
 
     if (req.method === "GET" && url.pathname === "/api/account-ledger") {
+      if (!(await requirePermission(session, "accounting.view"))) return sendJson(res, 403, { error: "FORBIDDEN" });
       const ledger = await buildAccountLedger(url.searchParams.get("accountCode"), {
         dateFrom: url.searchParams.get("dateFrom"),
         dateTo: url.searchParams.get("dateTo"),
@@ -2663,6 +2736,22 @@ async function handleApi(req, res) {
         dateTo: url.searchParams.get("dateTo")
       });
       return sendJson(res, 200, report);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/unbalanced-journals") {
+      if (!(await requirePermission(session, "users.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const rows = await pool.query(`
+        SELECT je.id, je.entry_date AS "entryDate", je.source, je.memo, je.status,
+               COALESCE(SUM(jl.debit),0)::float8  AS debit,
+               COALESCE(SUM(jl.credit),0)::float8 AS credit,
+               ABS(COALESCE(SUM(jl.debit),0) - COALESCE(SUM(jl.credit),0))::float8 AS diff
+          FROM journal_entries je
+          LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
+         GROUP BY je.id, je.entry_date, je.source, je.memo, je.status
+        HAVING ABS(COALESCE(SUM(jl.debit),0) - COALESCE(SUM(jl.credit),0)) > 0.001
+         ORDER BY je.id DESC
+      `);
+      return sendJson(res, 200, { count: rows.rowCount, rows: rows.rows });
     }
 
     if (req.method === "GET" && url.pathname === "/api/financial-statements") {
@@ -2900,6 +2989,58 @@ async function handleApi(req, res) {
         return journalId;
       });
       return sendJson(res, 200, { id });
+    }
+
+    if (req.method === "GET" && /^\/api\/journal\/\d+$/.test(url.pathname)) {
+      if (!(await requirePermission(session, "accounting.view"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const journalId = Number(url.pathname.split("/").pop());
+      const entry = await pool.query(
+        `SELECT id, entry_date AS "entryDate", source, memo, currency, exchange_rate AS "exchangeRate", status, created_at AS "createdAt"
+         FROM journal_entries WHERE id=$1`,
+        [journalId]
+      );
+      if (!entry.rowCount) return sendJson(res, 404, { error: "Journal not found" });
+      const lines = await pool.query(
+        `SELECT jl.account_code AS "accountCode", a.name AS "accountName",
+                jl.debit::float8 AS debit, jl.credit::float8 AS credit,
+                jl.debit_base::float8 AS "debitBase", jl.credit_base::float8 AS "creditBase", jl.note
+         FROM journal_lines jl
+         LEFT JOIN accounts a ON a.code = jl.account_code
+         WHERE jl.journal_entry_id=$1 ORDER BY jl.id`,
+        [journalId]
+      );
+      const totalDebit = lines.rows.reduce((s, l) => s + num(l.debit), 0);
+      const totalCredit = lines.rows.reduce((s, l) => s + num(l.credit), 0);
+      return sendJson(res, 200, { ...entry.rows[0], lines: lines.rows, totals: { debit: totalDebit, credit: totalCredit } });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/company-logo") {
+      if (!(await requirePermission(session, "settings.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const body = await readBody(req);
+      const logoData = String(body.logoBase64 || "");
+      if (logoData && !logoData.startsWith("data:image/")) return sendJson(res, 400, { error: "Invalid image format" });
+      await pool.query(
+        "INSERT INTO meta (key, value) VALUES ('company_logo', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+        [JSON.stringify({ data: logoData || null, updatedAt: new Date().toISOString() })]
+      );
+      await audit(session.username, "SAVE_COMPANY_LOGO", "Company logo updated");
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/company-logo") {
+      const result = await pool.query("SELECT value FROM meta WHERE key='company_logo' LIMIT 1");
+      const data = result.rows[0]?.value?.data || null;
+      return sendJson(res, 200, { data });
+    }
+
+    if (req.method === "POST" && /^\/api\/invoice-templates\/\d+\/activate$/.test(url.pathname)) {
+      if (!(await requirePermission(session, "settings.manage"))) return sendJson(res, 403, { error: "FORBIDDEN" });
+      const templateId = Number(url.pathname.split("/")[3]);
+      await pool.query("UPDATE invoice_templates SET active=false");
+      const result = await pool.query("UPDATE invoice_templates SET active=true WHERE id=$1 RETURNING id", [templateId]);
+      if (!result.rowCount) return sendJson(res, 404, { error: "Template not found" });
+      await audit(session.username, "ACTIVATE_TEMPLATE", `templateId=${templateId}`);
+      return sendJson(res, 200, { ok: true });
     }
 
     return sendJson(res, 404, { error: "NOT_FOUND" });

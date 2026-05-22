@@ -317,13 +317,40 @@
             <div id="auditLog" class="audit"></div>
           </section>
 
-          <form class="card" id="invoiceTemplateForm">
-            <h2>استيراد تصميم فاتورة Word</h2>
-            <label>اسم القالب<input name="name" required placeholder="فاتورة مبيعات رسمية" /></label>
-            <label>ملف Word DOCX<input name="templateFile" type="file" accept=".docx" required /></label>
-            <small>يمكن استخدام حقول متغيرة مثل: اسم الزبون، سعة المولد، سنوات الضمان، ساعات الضمان.</small>
-            <button type="submit">رفع القالب</button>
-          </form>
+          <section class="card" id="invoiceTemplateForm">
+            <h2>إعدادات الفواتير والمستندات</h2>
+
+            <div class="template-section">
+              <h3>شعار الشركة</h3>
+              <div id="companyLogoPreview" class="logo-preview-box"><span>لم يُرفع شعار بعد</span></div>
+              <label>رفع شعار الشركة (PNG, JPG, SVG)<input id="companyLogoInput" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" /></label>
+              <div class="inline-actions">
+                <button type="button" id="saveCompanyLogoBtn">حفظ الشعار</button>
+                <button type="button" class="secondary" id="removeCompanyLogoBtn">حذف الشعار</button>
+              </div>
+            </div>
+
+            <hr class="section-divider" />
+
+            <div class="template-section">
+              <h3>رفع قالب فاتورة Word</h3>
+              <form id="invoiceTemplateUploadForm">
+                <label>اسم القالب<input name="name" required placeholder="فاتورة مبيعات رسمية" /></label>
+                <label>ملف Word DOCX<input name="templateFile" type="file" accept=".docx" required /></label>
+                <small>يمكن استخدام حقول متغيرة: اسم الزبون، سعة المولد، سنوات الضمان، ساعات الضمان.</small>
+                <button type="submit">رفع القالب</button>
+              </form>
+            </div>
+
+            <div class="template-section">
+              <h3>القوالب المحفوظة</h3>
+              <div id="activeTemplateBadge" class="active-template-badge hidden"></div>
+              <table>
+                <thead><tr><th>الاسم</th><th>الملف</th><th>التاريخ</th><th>الحالة</th><th></th></tr></thead>
+                <tbody id="invoiceTemplatesTable2"></tbody>
+              </table>
+            </div>
+          </section>
 
           <section class="card account-ledger-card" id="usersPermissionsPanel">
             <div class="report-head">
@@ -505,6 +532,42 @@
       </section>
     </main>
     <div id="toastContainer" class="toast-container"></div>
+    <dialog id="journalPreviewModal" class="app-modal journal-modal">
+      <div class="modal-body journal-modal-body">
+        <div class="journal-print-header">
+          <img id="journalPrintLogo" class="journal-company-logo" style="display:none" alt="شعار الشركة" />
+          <div class="journal-print-title">
+            <h2>قيد محاسبي</h2>
+            <div id="journalPrintMeta" class="journal-print-meta"></div>
+          </div>
+        </div>
+        <table class="journal-lines-table">
+          <thead>
+            <tr>
+              <th>رمز الحساب</th>
+              <th>اسم الحساب</th>
+              <th>البيان</th>
+              <th>مدين</th>
+              <th>دائن</th>
+            </tr>
+          </thead>
+          <tbody id="journalPrintLines"></tbody>
+          <tfoot>
+            <tr class="journal-totals-row">
+              <td colspan="3"><strong>الإجمالي</strong></td>
+              <td id="journalPrintDebit" class="amount-cell"></td>
+              <td id="journalPrintCredit" class="amount-cell"></td>
+            </tr>
+          </tfoot>
+        </table>
+        <div id="journalBalanceStatus" class="journal-balance-status"></div>
+        <div class="modal-actions no-print">
+          <button type="button" id="printJournalBtn">طباعة القيد</button>
+          <button type="button" class="secondary" id="closeJournalPreviewBtn">إغلاق</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="accountModal" class="app-modal">
       <form method="dialog" id="accountModalForm" class="modal-body">
         <h3 id="accountModalTitle">إدارة حساب</h3>
